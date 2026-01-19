@@ -1,0 +1,31 @@
+version: v0.1
+name: demo-local
+description: local demo workflow
+
+inventory:
+  hosts:
+    local:
+      address: 127.0.0.1
+
+vars:
+  title: "BOPS Demo"
+
+plan:
+  mode: manual-approve
+  strategy: sequential
+
+steps:
+  - name: say hello
+    targets: [local]
+    action: cmd.run
+    with:
+      cmd: "echo demo start"
+
+  - name: render demo file
+    targets: [local]
+    action: template.render
+    with:
+      src: examples/templates/demo.tmpl
+      dest: /tmp/bops-demo.txt
+      vars:
+        owner: ops

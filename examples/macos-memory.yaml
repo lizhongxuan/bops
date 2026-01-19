@@ -1,0 +1,36 @@
+version: v0.1
+name: macos-memory-demo
+description: macOS M1 memory inspection demo
+
+inventory:
+  hosts:
+    local:
+      address: 127.0.0.1
+
+plan:
+  mode: manual-approve
+  strategy: sequential
+
+steps:
+  - name: show memory status
+    targets: [local]
+    action: cmd.run
+    with:
+      cmd: |
+        echo "memsize: $(sysctl -n hw.memsize)"
+        vm_stat
+
+  - name: show top memory process name
+    targets: [local]
+    action: cmd.run
+    with:
+      cmd: |
+        ps -axo rss,comm | awk 'NR>1' | sort -nr | head -n 1 | awk '{print $2}'
+
+  - name: show top process runtime
+    targets: [local]
+    action: cmd.run
+    with:
+      cmd: |
+        pid=$(ps -axo rss,pid | awk 'NR>1' | sort -nr | head -n 1 | awk '{print $2}')
+        ps -p "$pid" -o etime=

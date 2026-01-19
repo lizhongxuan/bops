@@ -1,0 +1,31 @@
+version: v0.1
+name: simple-local
+description: simple local workflow
+
+inventory:
+  hosts:
+    local:
+      address: 127.0.0.1
+
+vars:
+  name: ops
+
+plan:
+  mode: manual-approve
+  strategy: sequential
+
+steps:
+  - name: echo
+    targets: [local]
+    action: cmd.run
+    with:
+      cmd: "echo hello"
+
+  - name: render file
+    targets: [local]
+    action: template.render
+    with:
+      src: examples/templates/hello.tmpl
+      dest: /tmp/bops-hello.txt
+      vars:
+        name: ops
