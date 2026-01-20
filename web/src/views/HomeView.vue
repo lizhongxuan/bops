@@ -12,25 +12,6 @@
           </div>
         </div>
 
-        <div class="draft-stats">
-          <div class="draft-stat">
-            <span>草稿</span>
-            <strong>{{ draftStatus }}</strong>
-          </div>
-          <div class="draft-stat">
-            <span>风险</span>
-            <strong :class="`risk-${summary.riskLevel || 'low'}`">{{ summary.riskLevel || 'low' }}</strong>
-          </div>
-          <div class="draft-stat">
-            <span>步骤</span>
-            <strong>{{ steps.length }}</strong>
-          </div>
-          <div class="draft-stat">
-            <span>确认</span>
-            <strong>{{ confirmStatus }}</strong>
-          </div>
-        </div>
-
         <div class="chat-body">
           <ul class="timeline">
             <li v-for="entry in timelineEntries" :key="entry.id" :class="['timeline-item', entry.type]">
@@ -72,25 +53,11 @@
 
         <div class="composer">
           <div class="chat-toolbar">
-            <button class="btn ghost btn-sm" type="button" @click="openSessionModal">
-              会话
-            </button>
             <button class="btn ghost btn-sm" type="button" @click="createChatSession">
               新会话
             </button>
             <button class="btn ghost btn-sm" type="button" @click="showConfigModal = true">
-              选择目标主机/分组
-            </button>
-            <button
-              class="btn primary btn-sm"
-              type="button"
-              :disabled="busy || !prompt.trim()"
-              @click="startStream"
-            >
-              生成草稿
-            </button>
-            <button class="btn btn-sm" type="button" :disabled="busy || !yaml.trim()" @click="validateDraft">
-              校验
+              环境配置
             </button>
             <button class="btn btn-sm" type="button" :disabled="busy || !canFix" @click="runFix">
               修复
@@ -135,14 +102,7 @@
       <section class="panel workspace-panel">
         <div class="panel-head workspace-head">
           <div class="workspace-title">
-            <h2>{{ draftTitle }}</h2>
-            <p>通过聊天不断完善细节</p>
-            <div class="workspace-tags">
-              <span class="chip subtle">{{ planMode }}</span>
-              <span class="chip" :class="`risk-${summary.riskLevel || 'low'}`">
-                {{ summary.riskLevel || 'low' }}
-              </span>
-            </div>
+            <h2>工作流工作区</h2>
           </div>
           <div class="panel-actions">
             <div class="sync-controls">
@@ -174,9 +134,6 @@
               <span v-if="!autoSync && visualDirty" class="sync-tag warn">视觉未同步</span>
               <span v-if="!autoSync && yamlDirty" class="sync-tag warn">YAML 已更新</span>
             </div>
-            <button class="btn ghost btn-sm" type="button" @click="showSummaryModal = true">
-              需求摘要
-            </button>
             <button
               class="btn ghost btn-sm"
               type="button"
@@ -237,14 +194,6 @@
                   <button class="btn secondary btn-sm" type="button" @click="appendStep(newStepAction)">
                     新增步骤
                   </button>
-                  <button
-                    class="btn ghost btn-sm"
-                    type="button"
-                    :disabled="!targetSelections.length || !steps.length"
-                    @click="applyTargetsToAllSteps"
-                  >
-                    批量应用目标
-                  </button>
                 </div>
               </div>
               <div v-if="steps.length" class="steps-list">
@@ -266,7 +215,7 @@
                       <div class="step-name">{{ step.name }}</div>
                       <div class="step-meta">
                         {{ step.action || '未指定动作' }} ·
-                        {{ formatTargetsForInput(step.targets) || targetDisplay || '未设置目标' }}
+                        {{ formatTargetsForInput(step.targets) || '未设置目标' }}
                       </div>
                     </div>
                     <span class="step-status" :class="stepStatusClass(index)">
@@ -305,14 +254,6 @@
                   @update-step="updateStepFromDraft(selectedStepIndex, $event)"
                 />
                 <div class="detail-actions">
-                  <button
-                    class="btn ghost btn-sm"
-                    type="button"
-                    :disabled="!targetSelections.length"
-                    @click="applyTargetsToStep(selectedStepIndex)"
-                  >
-                    应用全局目标
-                  </button>
                   <button class="btn btn-sm" type="button" @click="openStepYamlModal(selectedStepIndex)">
                     编辑 YAML
                   </button>
@@ -417,84 +358,13 @@
         </div>
       </section>
     </div>
-    <div v-if="showSummaryModal" class="modal-backdrop" @click.self="showSummaryModal = false">
-      <div class="summary-modal">
-        <div class="modal-head">
-          <h3>需求摘要</h3>
-          <button class="modal-close" type="button" @click="showSummaryModal = false">&#10005;</button>
-        </div>
-        <p class="modal-summary">{{ summary.summary || 'AI 还在构建草稿...' }}</p>
-        <div class="modal-grid">
-          <div v-if="environmentNote" class="modal-row">
-            <span>目标环境</span>
-            <strong>{{ environmentNote }}</strong>
-          </div>
-          <div v-if="targetDisplay" class="modal-row">
-            <span>目标主机/分组</span>
-            <strong>{{ targetDisplay }}</strong>
-          </div>
-          <div class="modal-row">
-            <span>执行策略</span>
-            <strong>{{ planMode }}</strong>
-          </div>
-          <div class="modal-row">
-            <span>验证环境</span>
-            <strong>{{ selectedValidationEnv || '默认' }}</strong>
-          </div>
-          <div class="modal-row">
-            <span>重试次数</span>
-            <strong>{{ maxRetries }}</strong>
-          </div>
-        </div>
-        <div v-if="summary.issues.length" class="modal-issues">
-          <span class="chip secondary" v-for="issue in summary.issues" :key="issue">
-            {{ issue }}
-          </span>
-        </div>
-        <button class="btn primary" type="button" @click="showSummaryModal = false">知道了</button>
-      </div>
-    </div>
     <div v-if="showConfigModal" class="modal-backdrop" @click.self="showConfigModal = false">
       <div class="config-modal">
         <div class="modal-head">
-          <h3>目标与执行参数</h3>
+          <h3>环境配置</h3>
           <button class="modal-close" type="button" @click="showConfigModal = false">&#10005;</button>
         </div>
         <div class="modal-grid form-grid">
-          <div class="form-field">
-            <label>目标主机/分组</label>
-            <div class="tag-input">
-              <span
-                v-for="(item, index) in targetSelections"
-                :key="`${item}-${index}`"
-                class="tag"
-              >
-                {{ item }}
-                <button class="tag-remove" type="button" @click="removeTarget(index)">×</button>
-              </span>
-              <input
-                v-model="targetInput"
-                type="text"
-                placeholder="输入目标后回车"
-                @keydown.enter.prevent="commitTargetInput"
-                @blur="commitTargetInput"
-              />
-            </div>
-            <div v-if="inventorySuggestions.length" class="suggestions">
-              <span class="suggestions-label">inventory 建议</span>
-              <div class="suggestions-list">
-                <button
-                  v-for="item in inventorySuggestions"
-                  :key="item"
-                  class="chip"
-                  type="button"
-                  @click="addTarget(item)"
-                >
-                  {{ item }}
-                </button>
-              </div>
-            </div>
-          </div>
           <div class="form-field">
             <label>目标环境</label>
             <input v-model="environmentNote" type="text" placeholder="例如 Ubuntu 22.04 / macOS M1" />
@@ -508,7 +378,18 @@
           </div>
           <div class="form-field">
             <label>环境变量包</label>
-            <input v-model="envPackages" type="text" placeholder="prod-env, staging" />
+            <div class="select-row">
+              <div class="select-value">
+                <div v-if="selectedEnvPackages.length" class="chip-row">
+                  <span class="chip" v-for="name in selectedEnvPackages" :key="name">
+                    {{ name }}
+                    <button class="chip-remove" type="button" @click="removeEnvPackage(name)">×</button>
+                  </span>
+                </div>
+                <span v-else class="empty">无</span>
+              </div>
+              <button class="btn btn-sm" type="button" @click="openEnvPackageModal">选择</button>
+            </div>
           </div>
           <div class="form-field">
             <label>最大修复次数</label>
@@ -516,12 +397,17 @@
           </div>
           <div class="form-field">
             <label>验证环境</label>
-            <select v-model="selectedValidationEnv">
-              <option value="">默认</option>
-              <option v-for="env in validationEnvs" :key="env.name" :value="env.name">
-                {{ env.name }}
-              </option>
-            </select>
+            <div class="select-row">
+              <span class="select-value">{{ selectedValidationEnv || "无" }}</span>
+              <button
+                class="btn btn-sm"
+                type="button"
+                :disabled="!validationEnvs.length"
+                @click="openValidationEnvModal"
+              >
+                选择
+              </button>
+            </div>
           </div>
         </div>
         <div class="toggle-row">
@@ -537,6 +423,51 @@
         </div>
         <div class="modal-actions">
           <button class="btn primary btn-sm" type="button" @click="showConfigModal = false">完成</button>
+        </div>
+      </div>
+    </div>
+    <div v-if="showEnvPackageModal" class="modal-backdrop" @click.self="closeEnvPackageModal">
+      <div class="config-modal">
+        <div class="modal-head">
+          <h3>选择环境变量包</h3>
+          <button class="modal-close" type="button" @click="closeEnvPackageModal">&#10005;</button>
+        </div>
+        <div v-if="envPackageOptions.length" class="option-list">
+          <label class="option-item" v-for="pkg in envPackageOptions" :key="pkg.name">
+            <input type="checkbox" :value="pkg.name" v-model="envPackageDraft" />
+            <div>
+              <div class="option-title">{{ pkg.name }}</div>
+              <div v-if="pkg.description" class="option-desc">{{ pkg.description }}</div>
+            </div>
+          </label>
+        </div>
+        <div v-else class="empty">暂无环境变量包</div>
+        <div class="modal-actions">
+          <button class="btn ghost btn-sm" type="button" @click="closeEnvPackageModal">取消</button>
+          <button class="btn primary btn-sm" type="button" @click="applyEnvPackageSelection">确认</button>
+        </div>
+      </div>
+    </div>
+    <div v-if="showValidationEnvModal" class="modal-backdrop" @click.self="closeValidationEnvModal">
+      <div class="config-modal">
+        <div class="modal-head">
+          <h3>选择验证环境</h3>
+          <button class="modal-close" type="button" @click="closeValidationEnvModal">&#10005;</button>
+        </div>
+        <div v-if="validationEnvs.length" class="option-list">
+          <label class="option-item">
+            <input type="radio" value="" v-model="validationEnvDraft" />
+            <div class="option-title">无</div>
+          </label>
+          <label class="option-item" v-for="env in validationEnvs" :key="env.name">
+            <input type="radio" :value="env.name" v-model="validationEnvDraft" />
+            <div class="option-title">{{ env.name }}</div>
+          </label>
+        </div>
+        <div v-else class="empty">暂无验证环境</div>
+        <div class="modal-actions">
+          <button class="btn ghost btn-sm" type="button" @click="closeValidationEnvModal">取消</button>
+          <button class="btn primary btn-sm" type="button" @click="applyValidationEnvSelection">确认</button>
         </div>
       </div>
     </div>
@@ -649,6 +580,11 @@ type ValidationEnvSummary = {
   name: string;
 };
 
+type EnvPackageSummary = {
+  name: string;
+  description?: string;
+};
+
 type ValidationState = {
   ok: boolean;
   issues: string[];
@@ -674,7 +610,7 @@ type ChatEntry = {
   body: string;
   type: string;
   extra?: string;
-  action?: "summary" | "fix";
+  action?: "fix";
   actionLabel?: string;
 };
 
@@ -769,10 +705,15 @@ const confirmReason = ref("");
 
 const validationEnvs = ref<ValidationEnvSummary[]>([]);
 const selectedValidationEnv = ref("");
+const envPackageOptions = ref<EnvPackageSummary[]>([]);
+const selectedEnvPackages = ref<string[]>([]);
+const showEnvPackageModal = ref(false);
+const envPackageDraft = ref<string[]>([]);
+const showValidationEnvModal = ref(false);
+const validationEnvDraft = ref("");
 const executeEnabled = ref(false);
 const maxRetries = ref(2);
 const planMode = ref("manual-approve");
-const envPackages = ref("");
 const environmentNote = ref("");
 const targetSelections = ref<string[]>([]);
 const targetInput = ref("");
@@ -787,7 +728,6 @@ const examples = [
 
 const showExamples = ref(false);
 const showConfigModal = ref(false);
-const showSummaryModal = ref(false);
 const showHistoryModal = ref(false);
 const showSessionModal = ref(false);
 const showStepYamlModal = ref(false);
@@ -804,7 +744,6 @@ const workspaceTab = ref<"visual" | "yaml" | "validate">("visual");
 const visualYamlSource = computed(() => (autoSync.value ? yaml.value : visualYaml.value));
 const steps = computed<StepSummary[]>(() => parseSteps(visualYamlSource.value));
 const draftSteps = computed<DraftStep[]>(() => steps.value.map((step, index) => buildDraftStep(step, index)));
-const targetDisplay = computed(() => targetSelections.value.join(", "));
 const inventorySuggestions = computed(() => buildInventorySuggestions(yaml.value));
 const timelineEntries = computed(() => {
   return chatEntries.value;
@@ -874,6 +813,7 @@ watch(saveName, () => {
 
 onMounted(() => {
   loadValidationEnvs();
+  loadEnvPackages();
   void initChatSession();
 });
 
@@ -883,6 +823,15 @@ async function loadValidationEnvs() {
     validationEnvs.value = data.items || [];
   } catch (err) {
     validationEnvs.value = [];
+  }
+}
+
+async function loadEnvPackages() {
+  try {
+    const data = await request<{ items: EnvPackageSummary[] }>("/envs");
+    envPackageOptions.value = data.items || [];
+  } catch (err) {
+    envPackageOptions.value = [];
   }
 }
 
@@ -1220,6 +1169,45 @@ function ensureYamlSynced() {
   if (!confirmSync) return false;
   applyVisualToYaml();
   return true;
+}
+
+function openEnvPackageModal() {
+  envPackageDraft.value = [...selectedEnvPackages.value];
+  showEnvPackageModal.value = true;
+  if (!envPackageOptions.value.length) {
+    void loadEnvPackages();
+  }
+}
+
+function closeEnvPackageModal() {
+  showEnvPackageModal.value = false;
+  envPackageDraft.value = [];
+}
+
+function applyEnvPackageSelection() {
+  selectedEnvPackages.value = normalizeTargets(envPackageDraft.value);
+  closeEnvPackageModal();
+}
+
+function removeEnvPackage(name: string) {
+  selectedEnvPackages.value = selectedEnvPackages.value.filter((item) => item !== name);
+}
+
+function openValidationEnvModal() {
+  validationEnvDraft.value = selectedValidationEnv.value;
+  showValidationEnvModal.value = true;
+  if (!validationEnvs.value.length) {
+    void loadValidationEnvs();
+  }
+}
+
+function closeValidationEnvModal() {
+  showValidationEnvModal.value = false;
+}
+
+function applyValidationEnvSelection() {
+  selectedValidationEnv.value = validationEnvDraft.value;
+  closeValidationEnvModal();
 }
 
 function validateWorkflowName(name: string) {
@@ -1958,10 +1946,6 @@ function deleteStepBlock(content: string, index: number) {
 
 function handleEntryAction(action?: ChatEntry["action"]) {
   if (!action) return;
-  if (action === "summary") {
-    showSummaryModal.value = true;
-    return;
-  }
   if (action === "fix") {
     void runFix();
   }
@@ -2123,10 +2107,7 @@ function appendStep(action = "cmd.run") {
 }
 
 function buildContext() {
-  const packages = envPackages.value
-    .split(/,\s*/)
-    .map((item) => item.trim())
-    .filter(Boolean);
+  const packages = selectedEnvPackages.value;
   const payload: Record<string, unknown> = {
     plan_mode: planMode.value,
     max_retries: maxRetries.value
@@ -2263,12 +2244,10 @@ function applyResult(payload: Record<string, unknown>) {
   summary.value.issues = Array.isArray(payload.issues) ? payload.issues : [];
   const issueCount = Array.isArray(payload.issues) ? payload.issues.length : 0;
   pushChatEntry({
-    label: "需求摘要",
-    body: issueCount ? `已更新，待确认 ${issueCount} 项。` : "已更新，点击查看详情。",
+    label: "AI",
+    body: issueCount ? `已更新，待确认 ${issueCount} 项。` : "已更新草稿。",
     type: issueCount ? "warn" : "ai",
-    extra: "DONE",
-    action: "summary",
-    actionLabel: "查看摘要"
+    extra: "DONE"
   });
   if (Array.isArray(payload.history)) {
     history.value = payload.history.filter((item) => typeof item === "string");
@@ -2680,6 +2659,7 @@ function diffSummary(prev: string, next: string) {
   flex-direction: column;
   gap: 16px;
   min-height: 0;
+  overflow: hidden;
 }
 
 .chat-body {
@@ -2698,11 +2678,12 @@ function diffSummary(prev: string, next: string) {
 }
 
 .timeline-item {
-  padding: 12px 14px;
+  padding: 8px 10px;
   background: rgba(255, 255, 255, 0.68);
   border-radius: 14px;
   border: 1px solid rgba(27, 27, 27, 0.08);
-  max-width: 85%;
+  max-width: 70%;
+  font-size: 12px;
   animation: fade-up 0.35s ease;
 }
 
@@ -2910,6 +2891,8 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 14px;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .workspace-head {
@@ -2959,6 +2942,9 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 16px;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
 }
 
 .requirement-card {
@@ -3015,6 +3001,8 @@ textarea {
   grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
   gap: 16px;
   min-height: 0;
+  height: 100%;
+  overflow: hidden;
 }
 
 .steps-section {
@@ -3052,6 +3040,7 @@ textarea {
   gap: 10px;
   overflow: auto;
   min-height: 0;
+  flex: 1;
   padding-right: 2px;
 }
 
@@ -3162,6 +3151,7 @@ textarea {
   min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: auto;
 }
 
 .detail-inner {
@@ -3187,6 +3177,7 @@ textarea {
 .code {
   font-family: "IBM Plex Mono", "Space Grotesk", sans-serif;
   min-height: 200px;
+  flex: 1;
 }
 
 .yaml-actions {
@@ -3469,6 +3460,51 @@ textarea {
   color: var(--muted);
 }
 
+.select-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.select-value {
+  flex: 1;
+  font-size: 12px;
+  color: var(--ink);
+}
+
+.option-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 260px;
+  overflow: auto;
+  padding-right: 6px;
+}
+
+.option-item {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(27, 27, 27, 0.08);
+  background: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+}
+
+.option-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.option-desc {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
 .field-hint {
   font-size: 11px;
   color: var(--muted);
@@ -3506,6 +3542,14 @@ textarea {
   background: #f3eee7;
   font-size: 11px;
   color: var(--ink);
+}
+
+.chip-remove {
+  border: none;
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--muted);
 }
 
 .tag-remove {
