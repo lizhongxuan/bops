@@ -5,10 +5,10 @@
         <div class="panel-head chat-head">
           <div>
             <h2>工作流AI助手</h2>
-            <p>AI 负责拆解需求并生成草稿，你只需确认关键细节。</p>
+            <p>AI 负责拆解需求并生成草稿，你只需确认关键细节。当前会话：{{ chatSessionTitle || '新会话' }}</p>
           </div>
-          <div class="status-tag" :class="streamError ? 'error' : busy ? 'busy' : 'idle'">
-            {{ streamError ? '异常' : busy ? '生成中' : '就绪' }}
+          <div class="status-tag" :class="streamError ? 'error' : busy || chatPending ? 'busy' : 'idle'">
+            {{ streamError ? '异常' : busy ? '生成中' : chatPending ? '对话中' : '就绪' }}
           </div>
         </div>
 
@@ -33,18 +33,51 @@
 
         <div class="chat-body">
           <ul class="timeline">
-            <li v-for="entry in timelineEntries" :key="entry.id" class="timeline-item">
+            <li v-for="entry in timelineEntries" :key="entry.id" :class="['timeline-item', entry.type]">
               <div class="timeline-header">
                 <span class="timeline-badge" :class="entry.type">{{ entry.label }}</span>
                 <small v-if="entry.extra">{{ entry.extra }}</small>
               </div>
-              <p>{{ entry.body }}</p>
+              <p v-if="entry.body">{{ entry.body }}</p>
+              <div v-if="entry.actionLabel" class="timeline-actions">
+                <button class="btn ghost btn-sm" type="button" @click="handleEntryAction(entry.action)">
+                  {{ entry.actionLabel }}
+                </button>
+              </div>
+            </li>
+            <li v-if="chatPending" class="timeline-item typing">
+              <div class="timeline-header">
+                <span class="timeline-badge ai">AI</span>
+                <small>...</small>
+              </div>
+              <p>正在回复...</p>
             </li>
           </ul>
         </div>
 
+        <div v-if="pendingQuestions.length" class="pending-questions">
+          <div class="pending-title">还需要确认</div>
+          <div class="pending-chips">
+            <button
+              v-for="question in pendingQuestions"
+              :key="question"
+              class="chip"
+              type="button"
+              @click="applySuggestion(question)"
+            >
+              {{ question }}
+            </button>
+          </div>
+        </div>
+
         <div class="composer">
           <div class="chat-toolbar">
+            <button class="btn ghost btn-sm" type="button" @click="openSessionModal">
+              会话
+            </button>
+            <button class="btn ghost btn-sm" type="button" @click="createChatSession">
+              新会话
+            </button>
             <button class="btn ghost btn-sm" type="button" @click="showConfigModal = true">
               选择目标主机/分组
             </button>
@@ -58,6 +91,9 @@
             </button>
             <button class="btn btn-sm" type="button" :disabled="busy || !yaml.trim()" @click="validateDraft">
               校验
+            </button>
+            <button class="btn btn-sm" type="button" :disabled="busy || !canFix" @click="runFix">
+              修复
             </button>
             <button class="btn btn-sm" type="button" :disabled="executeBusy || !yaml.trim()" @click="runExecution">
               沙箱验证
@@ -109,6 +145,35 @@
             </div>
           </div>
           <div class="panel-actions">
+            <div class="sync-controls">
+              <span class="sync-label">同步</span>
+              <button
+                class="toggle-btn"
+                type="button"
+                :class="autoSync ? 'on' : 'off'"
+                @click="toggleAutoSync"
+              >
+                {{ autoSync ? '自动同步' : '同步关闭' }}
+              </button>
+              <button
+                v-if="!autoSync && visualDirty"
+                class="btn btn-sm"
+                type="button"
+                @click="applyVisualToYaml"
+              >
+                应用到 YAML
+              </button>
+              <button
+                v-if="!autoSync && yamlDirty"
+                class="btn btn-sm"
+                type="button"
+                @click="syncVisualFromYaml"
+              >
+                从 YAML 更新
+              </button>
+              <span v-if="!autoSync && visualDirty" class="sync-tag warn">视觉未同步</span>
+              <span v-if="!autoSync && yamlDirty" class="sync-tag warn">YAML 已更新</span>
+            </div>
             <button class="btn ghost btn-sm" type="button" @click="showSummaryModal = true">
               需求摘要
             </button>
@@ -154,31 +219,113 @@
         </div>
 
         <div v-if="workspaceTab === 'visual'" class="tab-panel">
-          <div class="steps-section">
-            <div class="steps-head">
-              <h3>步骤构建器</h3>
-              <div class="steps-head-actions">
-                <span class="step-count">{{ steps.length }} 步</span>
-                <button class="btn secondary btn-sm" type="button" @click="appendStep">
-                  新增步骤
-                </button>
+          <div class="visual-grid">
+            <div class="steps-section">
+              <div class="steps-head">
+                <h3>步骤构建器</h3>
+                <div class="steps-head-actions">
+                  <span class="step-count">{{ steps.length }} 步</span>
+                  <select v-model="newStepAction" class="step-action-select">
+                    <option value="cmd.run">cmd.run</option>
+                    <option value="pkg.install">pkg.install</option>
+                    <option value="template.render">template.render</option>
+                    <option value="service.ensure">service.ensure</option>
+                    <option value="script.shell">script.shell</option>
+                    <option value="script.python">script.python</option>
+                    <option value="env.set">env.set</option>
+                  </select>
+                  <button class="btn secondary btn-sm" type="button" @click="appendStep(newStepAction)">
+                    新增步骤
+                  </button>
+                  <button
+                    class="btn ghost btn-sm"
+                    type="button"
+                    :disabled="!targetSelections.length || !steps.length"
+                    @click="applyTargetsToAllSteps"
+                  >
+                    批量应用目标
+                  </button>
+                </div>
               </div>
+              <div v-if="steps.length" class="steps-list">
+                <div
+                  class="step-card"
+                  v-for="(step, index) in steps"
+                  :key="step.name || `step-${index}`"
+                  :class="{
+                    active: selectedStepIndex === index,
+                    error: canShowIssues && stepIssueIndexes.includes(index)
+                  }"
+                  role="button"
+                  tabindex="0"
+                  @click="selectStep(index)"
+                  @dblclick="openStepYamlModal(index)"
+                >
+                  <div class="step-card-head">
+                    <div>
+                      <div class="step-name">{{ step.name }}</div>
+                      <div class="step-meta">
+                        {{ step.action || '未指定动作' }} ·
+                        {{ formatTargetsForInput(step.targets) || targetDisplay || '未设置目标' }}
+                      </div>
+                    </div>
+                    <span class="step-status" :class="stepStatusClass(index)">
+                      {{ stepStatus(index) }}
+                    </span>
+                  </div>
+                  <div class="step-summary" v-if="step.required">{{ step.required }}</div>
+                  <div class="step-actions">
+                    <button class="btn btn-sm" type="button" @click.stop="selectStep(index)">
+                      详情
+                    </button>
+                    <button class="btn ghost btn-sm" type="button" @click.stop="duplicateStep(index)">
+                      复制
+                    </button>
+                    <button class="btn btn-sm" type="button" @click.stop="openStepYamlModal(index)">
+                      编辑 YAML
+                    </button>
+                    <button class="btn danger btn-sm" type="button" @click.stop="removeStep(index)">
+                      删除
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div v-else class="empty">尚未解析到步骤，生成草稿获取可视化内容。</div>
             </div>
-            <div v-if="steps.length" class="steps-list">
-              <button
-                class="step-card"
-                v-for="(step, index) in steps"
-                :key="step.name || `step-${index}`"
-                :class="{ active: selectedStep === step.name, error: stepIssueIndexes.includes(index) }"
-                type="button"
-                @click="focusStep(step)"
-              >
-                <div class="step-name">{{ step.name }}</div>
-                <div class="step-meta">{{ step.action || '未指定动作' }}</div>
-                <div class="step-targets" v-if="step.targets">目标: {{ step.targets }}</div>
-              </button>
-            </div>
-            <div v-else class="empty">尚未解析到步骤，生成草稿获取可视化内容。</div>
+            <aside class="step-detail-panel">
+              <div v-if="selectedStepIndex !== null && draftSteps[selectedStepIndex]" class="detail-inner">
+                <div class="detail-head">
+                  <h4>步骤详情</h4>
+                  <span class="step-status" :class="stepStatusClass(selectedStepIndex)">
+                    {{ stepStatus(selectedStepIndex) }}
+                  </span>
+                </div>
+                <StepDetailForm
+                  :step="draftSteps[selectedStepIndex]"
+                  @update-step="updateStepFromDraft(selectedStepIndex, $event)"
+                />
+                <div class="detail-actions">
+                  <button
+                    class="btn ghost btn-sm"
+                    type="button"
+                    :disabled="!targetSelections.length"
+                    @click="applyTargetsToStep(selectedStepIndex)"
+                  >
+                    应用全局目标
+                  </button>
+                  <button class="btn btn-sm" type="button" @click="openStepYamlModal(selectedStepIndex)">
+                    编辑 YAML
+                  </button>
+                  <button class="btn ghost btn-sm" type="button" @click="duplicateStep(selectedStepIndex)">
+                    复制
+                  </button>
+                  <button class="btn danger btn-sm" type="button" @click="removeStep(selectedStepIndex)">
+                    删除
+                  </button>
+                </div>
+              </div>
+              <div v-else class="empty">选择一个步骤进行编辑。</div>
+            </aside>
           </div>
         </div>
 
@@ -194,8 +341,8 @@
             <button
               class="btn primary"
               type="button"
-              :disabled="busy || !yaml.trim() || requiresConfirm"
-              @click="saveWorkflow"
+              :disabled="saveBusy || !yaml.trim() || requiresConfirm"
+              @click="openSaveModal"
             >
               保存为工作流
             </button>
@@ -282,9 +429,9 @@
             <span>目标环境</span>
             <strong>{{ environmentNote }}</strong>
           </div>
-          <div v-if="targetHint" class="modal-row">
+          <div v-if="targetDisplay" class="modal-row">
             <span>目标主机/分组</span>
-            <strong>{{ targetHint }}</strong>
+            <strong>{{ targetDisplay }}</strong>
           </div>
           <div class="modal-row">
             <span>执行策略</span>
@@ -316,7 +463,37 @@
         <div class="modal-grid form-grid">
           <div class="form-field">
             <label>目标主机/分组</label>
-            <input v-model="targetHint" type="text" placeholder="例如 web, db" />
+            <div class="tag-input">
+              <span
+                v-for="(item, index) in targetSelections"
+                :key="`${item}-${index}`"
+                class="tag"
+              >
+                {{ item }}
+                <button class="tag-remove" type="button" @click="removeTarget(index)">×</button>
+              </span>
+              <input
+                v-model="targetInput"
+                type="text"
+                placeholder="输入目标后回车"
+                @keydown.enter.prevent="commitTargetInput"
+                @blur="commitTargetInput"
+              />
+            </div>
+            <div v-if="inventorySuggestions.length" class="suggestions">
+              <span class="suggestions-label">inventory 建议</span>
+              <div class="suggestions-list">
+                <button
+                  v-for="item in inventorySuggestions"
+                  :key="item"
+                  class="chip"
+                  type="button"
+                  @click="addTarget(item)"
+                >
+                  {{ item }}
+                </button>
+              </div>
+            </div>
           </div>
           <div class="form-field">
             <label>目标环境</label>
@@ -387,13 +564,85 @@
         <div v-else class="empty">暂无草稿历史</div>
       </div>
     </div>
+    <div v-if="showSessionModal" class="modal-backdrop" @click.self="showSessionModal = false">
+      <div class="history-modal session-modal">
+        <div class="modal-head">
+          <h3>聊天会话</h3>
+          <button class="modal-close" type="button" @click="showSessionModal = false">&#10005;</button>
+        </div>
+        <div class="session-actions">
+          <button class="btn primary btn-sm" type="button" @click="createChatSession">
+            新建会话
+          </button>
+        </div>
+        <div v-if="chatSessions.length" class="session-list">
+          <button
+            class="history-item"
+            v-for="session in chatSessions"
+            :key="session.id"
+            type="button"
+            :class="{ active: session.id === chatSessionId }"
+            @click="selectChatSession(session.id)"
+          >
+            <div>
+              <div class="history-title">{{ session.title || '新会话' }}</div>
+              <div class="session-meta">
+                {{ formatSessionTime(session.updated_at) }} · {{ session.message_count || 0 }} 条
+              </div>
+            </div>
+            <span class="history-restore">恢复</span>
+          </button>
+        </div>
+        <div v-else class="empty">暂无聊天会话</div>
+      </div>
+    </div>
+    <div v-if="showStepYamlModal" class="modal-backdrop" @click.self="closeStepYamlModal">
+      <div class="yaml-modal">
+        <div class="modal-head">
+          <h3>步骤 YAML</h3>
+          <button class="modal-close" type="button" @click="closeStepYamlModal">&#10005;</button>
+        </div>
+        <p class="modal-summary">
+          编辑步骤片段后保存，会同步回可视化{{ autoSync ? "与 YAML" : "" }}。
+        </p>
+        <div v-if="!autoSync" class="sync-note">自动同步已关闭，仅更新可视化副本。</div>
+        <textarea v-model="stepYamlText" spellcheck="false" rows="12" class="code"></textarea>
+        <div v-if="stepYamlError" class="alert warn">{{ stepYamlError }}</div>
+        <div class="modal-actions">
+          <button class="btn ghost btn-sm" type="button" @click="focusYamlFromModal">定位到 YAML</button>
+          <button class="btn primary btn-sm" type="button" @click="applyStepYamlChanges">应用</button>
+        </div>
+      </div>
+    </div>
+    <div v-if="showSaveModal" class="modal-backdrop" @click.self="closeSaveModal">
+      <form class="save-modal" @submit.prevent="saveWorkflow(saveName)">
+        <div class="modal-head">
+          <h3>保存为工作流</h3>
+          <button class="modal-close" type="button" @click="closeSaveModal">&#10005;</button>
+        </div>
+        <div class="form-field">
+          <label>工作流名称</label>
+          <input v-model="saveName" type="text" placeholder="例如：web-nginx-setup" />
+          <span class="field-hint">仅支持字母、数字、短横线、下划线。</span>
+        </div>
+        <div v-if="saveError" class="alert warn">{{ saveError }}</div>
+        <div class="modal-actions">
+          <button class="btn ghost btn-sm" type="button" @click="closeSaveModal">取消</button>
+          <button class="btn primary btn-sm" type="submit" :disabled="saveBusy">
+            {{ saveBusy ? "保存中..." : "保存" }}
+          </button>
+        </div>
+      </form>
+    </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ApiError, apiBase, request } from "../lib/api";
+import StepDetailForm from "../components/StepDetailForm.vue";
+import { createDefaultStepWith, type DraftStep } from "../lib/draft";
 import { parseSteps, type StepSummary } from "../lib/workflowSteps";
 
 type ValidationEnvSummary = {
@@ -425,6 +674,28 @@ type ChatEntry = {
   body: string;
   type: string;
   extra?: string;
+  action?: "summary" | "fix";
+  actionLabel?: string;
+};
+
+type ChatSessionMessage = {
+  role: string;
+  content: string;
+};
+
+type ChatSession = {
+  id: string;
+  title: string;
+  created_at?: string;
+  updated_at?: string;
+  messages: ChatSessionMessage[];
+};
+
+type ChatSessionSummary = {
+  id: string;
+  title: string;
+  updated_at?: string;
+  message_count?: number;
 };
 
 type SummaryState = {
@@ -457,6 +728,10 @@ type HistoryEntry = {
 const prompt = ref("");
 const yaml = ref("");
 const yamlRef = ref<HTMLTextAreaElement | null>(null);
+const autoSync = ref(true);
+const visualYaml = ref("");
+const visualDirty = ref(false);
+const yamlDirty = ref(false);
 const busy = ref(false);
 const streamError = ref("");
 const progressEvents = ref<ProgressEvent[]>([]);
@@ -468,11 +743,16 @@ const chatEntries = ref<ChatEntry[]>([
     type: "ai"
   }
 ]);
-const selectedStep = ref("");
+const chatPending = ref(false);
+const chatSessions = ref<ChatSessionSummary[]>([]);
+const chatSessionId = ref("");
+const chatSessionTitle = ref("");
+const selectedStepIndex = ref<number | null>(null);
 const stepIssueIndexes = ref<number[]>([]);
 const draftId = ref("");
 const history = ref<string[]>([]);
 const validation = ref<ValidationState>({ ok: true, issues: [] });
+const validationTouched = ref(false);
 const validationBusy = ref(false);
 const executeBusy = ref(false);
 const executeResult = ref<ExecutionResult | null>(null);
@@ -494,8 +774,10 @@ const maxRetries = ref(2);
 const planMode = ref("manual-approve");
 const envPackages = ref("");
 const environmentNote = ref("");
-const targetHint = ref("");
+const targetSelections = ref<string[]>([]);
+const targetInput = ref("");
 const router = useRouter();
+const SESSION_STORAGE_KEY = "bops_chat_session_id";
 
 const examples = [
   "在 web1/web2 上安装 nginx，渲染配置并启动服务",
@@ -507,9 +789,23 @@ const showExamples = ref(false);
 const showConfigModal = ref(false);
 const showSummaryModal = ref(false);
 const showHistoryModal = ref(false);
+const showSessionModal = ref(false);
+const showStepYamlModal = ref(false);
+const stepYamlIndex = ref<number | null>(null);
+const stepYamlText = ref("");
+const stepYamlError = ref("");
+const showSaveModal = ref(false);
+const saveName = ref("");
+const saveError = ref("");
+const saveBusy = ref(false);
+const newStepAction = ref("cmd.run");
 
 const workspaceTab = ref<"visual" | "yaml" | "validate">("visual");
-const steps = computed<StepSummary[]>(() => parseSteps(yaml.value));
+const visualYamlSource = computed(() => (autoSync.value ? yaml.value : visualYaml.value));
+const steps = computed<StepSummary[]>(() => parseSteps(visualYamlSource.value));
+const draftSteps = computed<DraftStep[]>(() => steps.value.map((step, index) => buildDraftStep(step, index)));
+const targetDisplay = computed(() => targetSelections.value.join(", "));
+const inventorySuggestions = computed(() => buildInventorySuggestions(yaml.value));
 const timelineEntries = computed(() => {
   return chatEntries.value;
 });
@@ -531,24 +827,54 @@ const draftStatus = computed(() => {
   return "未生成";
 });
 const confirmStatus = computed(() => (validation.value.ok ? "正常" : "需处理"));
+const canFix = computed(() => {
+  if (!yaml.value.trim()) return false;
+  return summary.value.issues.length > 0 || validation.value.issues.length > 0;
+});
+const pendingQuestions = computed(() => {
+  const issues = summary.value.issues.length ? summary.value.issues : validation.value.issues;
+  const unique = Array.from(new Set(issues.filter((item) => item && item.trim())));
+  return unique.slice(0, 6);
+});
+const syncBlocked = computed(() => !autoSync.value && (visualDirty.value || yamlDirty.value));
+const canShowIssues = computed(() => !syncBlocked.value);
 
 let chatIndex = 0;
 let summaryTimer: number | null = null;
-watch(yaml, () => {
-  if (summaryTimer) {
-    window.clearTimeout(summaryTimer);
+watch(
+  yaml,
+  (next, prev) => {
+    if (autoSync.value) {
+      visualYaml.value = next;
+      visualDirty.value = false;
+      yamlDirty.value = false;
+      selectedStepIndex.value = null;
+    } else if (next !== prev) {
+      yamlDirty.value = next !== visualYaml.value;
+    }
+    if (summaryTimer) {
+      window.clearTimeout(summaryTimer);
+    }
+    stepIssueIndexes.value = [];
+    humanConfirmed.value = false;
+    confirmReason.value = "";
+    validationTouched.value = false;
+    summaryTimer = window.setTimeout(() => {
+      void refreshSummary();
+    }, 600);
+  },
+  { immediate: true }
+);
+
+watch(saveName, () => {
+  if (saveError.value) {
+    saveError.value = "";
   }
-  selectedStep.value = "";
-  stepIssueIndexes.value = [];
-  humanConfirmed.value = false;
-  confirmReason.value = "";
-  summaryTimer = window.setTimeout(() => {
-    void refreshSummary();
-  }, 600);
 });
 
 onMounted(() => {
   loadValidationEnvs();
+  void initChatSession();
 });
 
 async function loadValidationEnvs() {
@@ -565,9 +891,112 @@ function pushChatEntry(entry: Omit<ChatEntry, "id">) {
   chatEntries.value = [...chatEntries.value, { id, ...entry }];
 }
 
+function setChatEntriesFromSession(session: ChatSession) {
+  const messages = Array.isArray(session.messages) ? session.messages : [];
+  if (!messages.length) {
+    chatEntries.value = [
+      {
+        id: "welcome",
+        label: "AI",
+        body: "你好！告诉我你的需求，我会拆解成可执行工作流，并主动追问缺失细节。",
+        type: "ai"
+      }
+    ];
+    return;
+  }
+  chatEntries.value = messages.map((msg, index) => ({
+    id: `session-${index}`,
+    label: msg.role === "user" ? "用户" : "AI",
+    body: msg.content,
+    type: msg.role === "user" ? "user" : "ai"
+  }));
+}
+
+async function loadChatSessions() {
+  try {
+    const data = await request<{ items: ChatSessionSummary[] }>("/ai/chat/sessions");
+    chatSessions.value = data.items || [];
+  } catch (err) {
+    chatSessions.value = [];
+  }
+}
+
+async function restoreChatSession(id: string) {
+  try {
+    const data = await request<{ session: ChatSession }>(`/ai/chat/sessions/${id}`);
+    chatSessionId.value = data.session.id;
+    chatSessionTitle.value = data.session.title || "新会话";
+    window.localStorage.setItem(SESSION_STORAGE_KEY, chatSessionId.value);
+    setChatEntriesFromSession(data.session);
+  } catch (err) {
+    chatSessionId.value = "";
+    chatSessionTitle.value = "";
+  }
+}
+
+async function createChatSession() {
+  try {
+    const data = await request<{ session: ChatSession }>("/ai/chat/sessions", {
+      method: "POST",
+      body: { title: "新会话" }
+    });
+    chatSessionId.value = data.session.id;
+    chatSessionTitle.value = data.session.title || "新会话";
+    window.localStorage.setItem(SESSION_STORAGE_KEY, chatSessionId.value);
+    setChatEntriesFromSession(data.session);
+    await loadChatSessions();
+    showSessionModal.value = false;
+  } catch (err) {
+    pushChatEntry({
+      label: "系统",
+      body: "新建会话失败，请检查服务是否启动",
+      type: "error",
+      extra: "ERROR"
+    });
+  }
+}
+
+async function initChatSession() {
+  const stored = window.localStorage.getItem(SESSION_STORAGE_KEY);
+  if (stored) {
+    await restoreChatSession(stored);
+    if (chatSessionId.value) {
+      return;
+    }
+  }
+  await loadChatSessions();
+  if (chatSessions.value.length) {
+    await restoreChatSession(chatSessions.value[0].id);
+    return;
+  }
+  await createChatSession();
+}
+
+function openSessionModal() {
+  showSessionModal.value = true;
+  void loadChatSessions();
+}
+
+function selectChatSession(id: string) {
+  void restoreChatSession(id);
+  showSessionModal.value = false;
+}
+
+function formatSessionTime(value?: string) {
+  if (!value) return "未知时间";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "未知时间";
+  return date.toLocaleString();
+}
+
 function applyExample(text: string) {
   prompt.value = text;
   showExamples.value = false;
+}
+
+function applySuggestion(text: string) {
+  const trimmed = prompt.value.trim();
+  prompt.value = trimmed ? `${trimmed}\n${text}` : text;
 }
 
 function toggleExamples() {
@@ -579,12 +1008,1004 @@ function clearPrompt() {
   showExamples.value = false;
 }
 
+function commitTargetInput() {
+  const raw = targetInput.value;
+  const items = parseTargets(raw);
+  if (!items.length) {
+    targetInput.value = "";
+    return;
+  }
+  targetSelections.value = normalizeTargets([...targetSelections.value, ...items]);
+  targetInput.value = "";
+}
+
+function addTarget(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) return;
+  targetSelections.value = normalizeTargets([...targetSelections.value, trimmed]);
+}
+
+function removeTarget(index: number) {
+  targetSelections.value = targetSelections.value.filter((_, idx) => idx !== index);
+}
+
 function formatNode(node: string) {
   return node.replace(/_/g, " ");
 }
 
-function focusStep(step: StepSummary) {
-  selectedStep.value = step.name;
+function formatTargetsForInput(value: string) {
+  return value.replace(/[\[\]]/g, "").replace(/['"]/g, "").trim();
+}
+
+function parseTargets(raw: string) {
+  const cleaned = formatTargetsForInput(raw);
+  return cleaned
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function normalizeTargets(values: string[]) {
+  const unique: string[] = [];
+  const seen = new Set<string>();
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed || seen.has(trimmed)) continue;
+    seen.add(trimmed);
+    unique.push(trimmed);
+  }
+  return unique;
+}
+
+function buildInventorySuggestions(content: string) {
+  const { groups, hosts } = parseInventoryTargets(content);
+  return normalizeTargets([...groups, ...hosts]);
+}
+
+function parseInventoryTargets(content: string) {
+  const lines = content.split(/\r?\n/);
+  const groups: string[] = [];
+  const hosts: string[] = [];
+  let inInventory = false;
+  let inventoryIndent = 0;
+  let inGroups = false;
+  let groupsIndent = 0;
+  let inHosts = false;
+  let hostsIndent = 0;
+
+  for (const line of lines) {
+    const inventoryMatch = line.match(/^(\s*)inventory\s*:\s*$/);
+    if (inventoryMatch) {
+      inInventory = true;
+      inventoryIndent = inventoryMatch[1].length;
+      inGroups = false;
+      inHosts = false;
+      continue;
+    }
+
+    if (!inInventory) continue;
+    if (line.trim() !== "") {
+      const indent = line.match(/^(\s*)/)[1].length;
+      if (indent <= inventoryIndent) {
+        inInventory = false;
+        inGroups = false;
+        inHosts = false;
+        continue;
+      }
+    }
+
+    const groupsMatch = line.match(/^(\s*)groups\s*:\s*$/);
+    if (groupsMatch && groupsMatch[1].length === inventoryIndent + 2) {
+      inGroups = true;
+      groupsIndent = groupsMatch[1].length;
+      inHosts = false;
+      continue;
+    }
+    const hostsMatch = line.match(/^(\s*)hosts\s*:\s*$/);
+    if (hostsMatch && hostsMatch[1].length === inventoryIndent + 2) {
+      inHosts = true;
+      hostsIndent = hostsMatch[1].length;
+      inGroups = false;
+      continue;
+    }
+
+    if (inGroups) {
+      if (line.trim() === "") continue;
+      const indent = line.match(/^(\s*)/)[1].length;
+      if (indent <= groupsIndent) {
+        inGroups = false;
+        continue;
+      }
+      if (indent === groupsIndent + 2) {
+        const nameMatch = line.match(/^\s*([a-zA-Z0-9_-]+)\s*:/);
+        if (nameMatch) {
+          groups.push(nameMatch[1]);
+        }
+      }
+    }
+
+    if (inHosts) {
+      if (line.trim() === "") continue;
+      const indent = line.match(/^(\s*)/)[1].length;
+      if (indent <= hostsIndent) {
+        inHosts = false;
+        continue;
+      }
+      if (indent === hostsIndent + 2) {
+        const nameMatch = line.match(/^\s*([a-zA-Z0-9_-]+)\s*:/);
+        if (nameMatch) {
+          hosts.push(nameMatch[1]);
+        }
+      }
+    }
+  }
+
+  return { groups, hosts };
+}
+
+function envMapToText(env?: Record<string, string>) {
+  if (!env) return "";
+  return Object.entries(env)
+    .map(([key, value]) => `${key}=${value}`)
+    .join("\n");
+}
+
+function envTextToMap(text: string) {
+  const result: Record<string, string> = {};
+  const lines = text.split(/\r?\n/);
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const splitIndex = trimmed.indexOf("=");
+    if (splitIndex <= 0) continue;
+    const key = trimmed.slice(0, splitIndex).trim();
+    if (!key) continue;
+    result[key] = trimmed.slice(splitIndex + 1).trim();
+  }
+  return result;
+}
+
+function getVisualYaml() {
+  return autoSync.value ? yaml.value : visualYaml.value;
+}
+
+function setVisualYaml(next: string, markDirty = true) {
+  visualYaml.value = next;
+  if (autoSync.value) {
+    yaml.value = next;
+    visualDirty.value = false;
+    yamlDirty.value = false;
+  } else if (markDirty) {
+    visualDirty.value = next !== yaml.value;
+  }
+}
+
+function applyVisualToYaml() {
+  yaml.value = visualYaml.value;
+  visualDirty.value = false;
+  yamlDirty.value = false;
+}
+
+function syncVisualFromYaml() {
+  visualYaml.value = yaml.value;
+  visualDirty.value = false;
+  yamlDirty.value = false;
+  selectedStepIndex.value = null;
+}
+
+function toggleAutoSync() {
+  if (autoSync.value) {
+    autoSync.value = false;
+    visualYaml.value = yaml.value;
+    visualDirty.value = false;
+    yamlDirty.value = false;
+    return;
+  }
+  if (visualDirty.value) {
+    const useVisual = window.confirm("可视化有未同步修改，是否应用到 YAML？");
+    if (useVisual) {
+      applyVisualToYaml();
+    } else {
+      syncVisualFromYaml();
+    }
+  } else if (yamlDirty.value) {
+    syncVisualFromYaml();
+  }
+  autoSync.value = true;
+}
+
+function ensureYamlSynced() {
+  if (autoSync.value || !visualDirty.value) return true;
+  const confirmSync = window.confirm("可视化有未同步修改，是否先应用到 YAML？");
+  if (!confirmSync) return false;
+  applyVisualToYaml();
+  return true;
+}
+
+function validateWorkflowName(name: string) {
+  if (!name) {
+    return "请输入工作流名称";
+  }
+  if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
+    return "名称格式不正确，仅支持字母、数字、短横线、下划线";
+  }
+  return "";
+}
+
+function openSaveModal() {
+  showSaveModal.value = true;
+  saveName.value = "";
+  saveError.value = "";
+}
+
+function closeSaveModal() {
+  showSaveModal.value = false;
+  saveError.value = "";
+}
+
+function buildDraftStep(step: StepSummary, index: number): DraftStep {
+  const action = step.action || "cmd.run";
+  const withData = createDefaultStepWith(action);
+  withData.cmd = step.cmd || "";
+  withData.dir = step.dir || "";
+  withData.src = step.src || "";
+  withData.dest = step.dest || "";
+  withData.state = step.state || (action === "service.ensure" ? "started" : "");
+  withData.script = step.script || "";
+  withData.scriptRef = step.scriptRef || "";
+  withData.envText = envMapToText(step.env);
+  withData.vars = step.vars || "";
+  if (action === "pkg.install") {
+    withData.packages = step.withName ? formatTargetsForInput(step.withName) : "";
+  }
+  if (action === "service.ensure") {
+    withData.name = step.withName || "";
+  }
+  return {
+    id: step.name ? `${step.name}-${index}` : `step-${index}`,
+    name: step.name || "",
+    action,
+    targets: formatTargetsForInput(step.targets || ""),
+    with: withData
+  };
+}
+
+function stepStatus(index: number) {
+  if (syncBlocked.value) {
+    return "Unsynced";
+  }
+  if (stepIssueIndexes.value.includes(index)) {
+    return "Failed";
+  }
+  if (summary.value.riskLevel === "high") {
+    return "Risky";
+  }
+  if (validationTouched.value && validation.value.ok) {
+    return "Validated";
+  }
+  return "Draft";
+}
+
+function stepStatusClass(index: number) {
+  if (syncBlocked.value) {
+    return "unsynced";
+  }
+  if (stepIssueIndexes.value.includes(index)) {
+    return "failed";
+  }
+  if (summary.value.riskLevel === "high") {
+    return "risky";
+  }
+  if (validationTouched.value && validation.value.ok) {
+    return "validated";
+  }
+  return "draft";
+}
+
+function clearStepWithFields(content: string, index: number) {
+  let next = content;
+  next = updateStepWithField(next, index, "cmd", "", true);
+  next = updateStepWithField(next, index, "dir", "", false);
+  next = updateStepWithField(next, index, "name", "", false);
+  next = updateStepWithField(next, index, "names", "", false);
+  next = updateStepWithField(next, index, "src", "", false);
+  next = updateStepWithField(next, index, "dest", "", false);
+  next = updateStepWithField(next, index, "state", "", false);
+  next = updateStepWithField(next, index, "script", "", true);
+  next = updateStepWithField(next, index, "script_ref", "", false);
+  next = updateStepEnvBlock(next, index, {});
+  next = updateStepVarsBlock(next, index, "");
+  return next;
+}
+
+function updateStepFromDraft(index: number | null, draftStep: DraftStep) {
+  if (index === null) return;
+  const current = steps.value[index];
+  const previousAction = current?.action || "";
+  const nextAction = draftStep.action.trim();
+  let next = getVisualYaml();
+
+  const name = draftStep.name.trim();
+  if (name) {
+    next = updateStepField(next, index, "name", name);
+  }
+  if (nextAction) {
+    next = updateStepField(next, index, "action", nextAction);
+  }
+  next = updateStepField(next, index, "targets", draftStep.targets);
+
+  if (nextAction && nextAction !== previousAction) {
+    next = clearStepWithFields(next, index);
+  }
+
+  const withData = draftStep.with;
+  if (nextAction === "cmd.run") {
+    next = updateStepWithField(next, index, "cmd", withData.cmd || "", true);
+    next = updateStepWithField(next, index, "dir", withData.dir || "", false);
+    next = updateStepEnvBlock(next, index, envTextToMap(withData.envText || ""));
+  } else if (nextAction === "pkg.install") {
+    const packages = withData.packages || "";
+    const items = parseTargets(packages);
+    if (items.length > 1) {
+      const formatted = `[${items.map((item) => formatScalar(item)).join(", ")}]`;
+      next = updateStepWithField(next, index, "name", "", false);
+      next = updateStepWithField(next, index, "names", formatted, false);
+    } else {
+      const value = items[0] || "";
+      next = updateStepWithField(next, index, "names", "", false);
+      next = updateStepWithField(next, index, "name", value, false);
+    }
+  } else if (nextAction === "template.render") {
+    next = updateStepWithField(next, index, "src", withData.src || "", false);
+    next = updateStepWithField(next, index, "dest", withData.dest || "", false);
+    next = updateStepVarsBlock(next, index, withData.vars || "");
+  } else if (nextAction === "service.ensure") {
+    next = updateStepWithField(next, index, "name", withData.name || "", false);
+    next = updateStepWithField(next, index, "state", withData.state || "", false);
+  } else if (nextAction === "env.set") {
+    next = updateStepEnvBlock(next, index, envTextToMap(withData.envText || ""));
+  } else if (nextAction.startsWith("script.")) {
+    const scriptRef = withData.scriptRef?.trim() || "";
+    const script = withData.script || "";
+    if (scriptRef) {
+      next = updateStepWithField(next, index, "script", "", true);
+      next = updateStepWithField(next, index, "script_ref", scriptRef, false);
+    } else if (script) {
+      next = updateStepWithField(next, index, "script_ref", "", false);
+      next = updateStepWithField(next, index, "script", script, true);
+    } else {
+      next = updateStepWithField(next, index, "script_ref", "", false);
+      next = updateStepWithField(next, index, "script", "", true);
+    }
+  }
+
+  setVisualYaml(next);
+}
+
+function applyTargetsToAllSteps() {
+  if (!targetSelections.value.length) return;
+  const value = targetSelections.value.join(", ");
+  let next = getVisualYaml();
+  steps.value.forEach((_, index) => {
+    next = updateStepField(next, index, "targets", value);
+  });
+  setVisualYaml(next);
+}
+
+function applyTargetsToStep(index: number | null) {
+  if (index === null) return;
+  if (!targetSelections.value.length) return;
+  const value = targetSelections.value.join(", ");
+  setVisualYaml(updateStepField(getVisualYaml(), index, "targets", value));
+}
+
+function duplicateStep(index: number | null) {
+  if (index === null) return;
+  if (index < 0 || index >= steps.value.length) return;
+  setVisualYaml(duplicateStepBlock(getVisualYaml(), index));
+  selectedStepIndex.value = index + 1;
+}
+
+function removeStep(index: number | null) {
+  if (index === null) return;
+  const total = steps.value.length;
+  if (index < 0 || index >= total) return;
+  setVisualYaml(deleteStepBlock(getVisualYaml(), index));
+  if (selectedStepIndex.value === null) return;
+  if (selectedStepIndex.value === index) {
+    const nextIndex = index < total - 1 ? index : index - 1;
+    selectedStepIndex.value = nextIndex >= 0 ? nextIndex : null;
+  } else if (selectedStepIndex.value > index) {
+    selectedStepIndex.value -= 1;
+  }
+}
+
+function buildMultilineField(key: string, value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return [`    ${key}: ""`];
+  }
+  if (trimmed.includes("\n")) {
+    const payload = trimmed.split(/\r?\n/).map((line) => `      ${line}`);
+    return [`    ${key}: |`, ...payload];
+  }
+  return [`    ${key}: ${formatScalar(trimmed)}`];
+}
+
+function buildStepSnippet(name: string, action: string, targets: string[]) {
+  const trimmedName = name.trim() || "new step";
+  const normalizedTargets = normalizeTargets(targets);
+  const lines = [`- name: ${trimmedName}`];
+  if (normalizedTargets.length) {
+    lines.push(`  targets: [${normalizedTargets.join(", ")}]`);
+  }
+  lines.push(`  action: ${action}`);
+  lines.push("  with:");
+
+  if (action === "cmd.run") {
+    lines.push(...buildMultilineField("cmd", "echo \"hello\""));
+  } else if (action === "pkg.install") {
+    lines.push("    name: package-name");
+  } else if (action === "template.render") {
+    lines.push("    src: template.j2");
+    lines.push("    dest: /etc/example.conf");
+    lines.push("    vars:");
+    lines.push("      key: value");
+  } else if (action === "service.ensure") {
+    lines.push("    name: service-name");
+    lines.push("    state: started");
+  } else if (action === "env.set") {
+    lines.push("    env:");
+    lines.push("      KEY: VALUE");
+  } else if (action.startsWith("script.")) {
+    lines.push(...buildMultilineField("script", "echo \"hello\""));
+  }
+
+  return lines;
+}
+
+function buildWithFieldLines(
+  key: string,
+  value: string,
+  propIndent: string,
+  multiline: boolean,
+  allowEmpty = false
+) {
+  const fieldIndent = `${propIndent}  `;
+  if (!value) {
+    return allowEmpty ? [`${fieldIndent}${key}: ""`] : [];
+  }
+  if (multiline && value.includes("\n")) {
+    const payload = value.split(/\r?\n/).map((line) => `${fieldIndent}  ${line}`);
+    return [`${fieldIndent}${key}: |`, ...payload];
+  }
+  return [`${fieldIndent}${key}: ${formatScalar(value)}`];
+}
+
+function escapeRegex(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function formatScalar(value: string) {
+  if (value === "") {
+    return '""';
+  }
+  if (/[:#]/.test(value) || value.includes("\"")) {
+    return JSON.stringify(value);
+  }
+  return value;
+}
+
+function collectStepLines(lines: string[]) {
+  const stepLines: number[] = [];
+  let inSteps = false;
+  let stepsIndent = 0;
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const line = lines[i];
+    const stepsMatch = line.match(/^(\s*)steps\s*:\s*$/);
+    if (stepsMatch) {
+      inSteps = true;
+      stepsIndent = stepsMatch[1].length;
+      continue;
+    }
+    if (inSteps) {
+      const indent = line.match(/^(\s*)/)[1].length;
+      if (indent <= stepsIndent && line.trim() !== "") {
+        inSteps = false;
+        continue;
+      }
+      if (/^\s*-\s*name\s*:/i.test(line)) {
+        stepLines.push(i + 1);
+      }
+    }
+  }
+  return stepLines;
+}
+
+function findStepsSection(lines: string[]) {
+  const startIndex = lines.findIndex((line) => /^\s*steps\s*:\s*$/.test(line));
+  if (startIndex === -1) return null;
+  const sectionIndent = lines[startIndex].match(/^(\s*)/)[1].length;
+  let endIndex = startIndex + 1;
+  while (endIndex < lines.length) {
+    const line = lines[endIndex];
+    if (line.trim() === "") {
+      endIndex += 1;
+      continue;
+    }
+    const indent = line.match(/^(\s*)/)[1].length;
+    if (indent <= sectionIndent && /^\s*[a-zA-Z0-9_-]+\s*:/i.test(line)) {
+      break;
+    }
+    endIndex += 1;
+  }
+  return { start: startIndex, end: endIndex };
+}
+
+function getStepBlocks(content: string) {
+  const lines = content.split(/\r?\n/);
+  const section = findStepsSection(lines);
+  if (!section) return null;
+  const stepLines = collectStepLines(lines);
+  const blocks = stepLines.map((startLine, idx) => {
+    const start = startLine - 1;
+    const end = idx + 1 < stepLines.length ? stepLines[idx + 1] - 1 : section.end;
+    return lines.slice(start, end);
+  });
+  return {
+    lines,
+    blocks,
+    sectionStart: section.start,
+    sectionEnd: section.end
+  };
+}
+
+function getStepBlock(content: string, index: number) {
+  const data = getStepBlocks(content);
+  if (!data) return "";
+  if (index < 0 || index >= data.blocks.length) return "";
+  return data.blocks[index].join("\n").trimEnd();
+}
+
+function normalizeStepBlock(blockText: string, baseIndent: string) {
+  const trimmed = blockText.trimEnd();
+  if (!trimmed) return [];
+  const lines = trimBlock(trimmed.split(/\r?\n/));
+  const firstLine = lines.find((line) => line.trim() !== "") || "";
+  const needsIndent = firstLine.trimStart() === firstLine && firstLine.startsWith("-");
+  if (!needsIndent) return lines;
+  return lines.map((line) => (line.trim() ? `${baseIndent}${line}` : line));
+}
+
+function replaceStepBlock(content: string, index: number, blockText: string) {
+  const data = getStepBlocks(content);
+  if (!data) return content;
+  if (index < 0 || index >= data.blocks.length) return content;
+  const baseIndentMatch = data.blocks[index][0]?.match(/^(\s*)-/);
+  const baseIndent = baseIndentMatch ? baseIndentMatch[1] : "  ";
+  const nextBlock = normalizeStepBlock(blockText, baseIndent);
+  if (!nextBlock.length) return content;
+  const nextBlocks = [...data.blocks];
+  nextBlocks[index] = nextBlock;
+  return rebuildStepsSection(data.lines, nextBlocks, data.sectionStart, data.sectionEnd);
+}
+
+function trimBlock(block: string[]) {
+  const next = [...block];
+  while (next.length && next[0].trim() === "") {
+    next.shift();
+  }
+  while (next.length && next[next.length - 1].trim() === "") {
+    next.pop();
+  }
+  return next;
+}
+
+function rebuildStepsSection(
+  lines: string[],
+  blocks: string[][],
+  sectionStart: number,
+  sectionEnd: number
+) {
+  const trimmedBlocks = blocks.map((block) => trimBlock(block));
+  if (trimmedBlocks.length === 0) {
+    const next = [...lines.slice(0, sectionStart + 1), ...lines.slice(sectionEnd)];
+    return next.join("\n").trimEnd() + "\n";
+  }
+
+  const body: string[] = [];
+  trimmedBlocks.forEach((block, idx) => {
+    if (idx > 0) {
+      body.push("");
+    }
+    body.push(...block);
+  });
+
+  const next = [...lines.slice(0, sectionStart + 1), ...body, ...lines.slice(sectionEnd)];
+  return next.join("\n").trimEnd() + "\n";
+}
+
+function updateStepField(content: string, index: number, field: "name" | "action" | "targets", value: string) {
+  const lines = content.split(/\r?\n/);
+  const section = findStepsSection(lines);
+  if (!section) {
+    return content;
+  }
+  const stepLines = collectStepLines(lines);
+  if (index < 0 || index >= stepLines.length) {
+    return content;
+  }
+
+  const start = stepLines[index] - 1;
+  const end = index + 1 < stepLines.length ? stepLines[index + 1] - 1 : section.end;
+  const block = lines.slice(start, end);
+  const baseIndentMatch = block[0]?.match(/^(\s*)-/);
+  const baseIndent = baseIndentMatch ? baseIndentMatch[1] : "  ";
+  const propIndent = `${baseIndent}  `;
+
+  if (field === "name") {
+    block[0] = `${baseIndent}- name: ${value}`;
+  }
+
+  if (field === "action") {
+    const actionIndex = block.findIndex((line) => new RegExp(`^${propIndent}action\\s*:`).test(line));
+    if (actionIndex >= 0) {
+      block[actionIndex] = `${propIndent}action: ${value}`;
+    } else {
+      block.splice(1, 0, `${propIndent}action: ${value}`);
+    }
+  }
+
+  if (field === "targets") {
+    const targetsIndex = block.findIndex((line) => new RegExp(`^${propIndent}targets\\s*:`).test(line));
+    const formatted = formatTargetsForInput(value);
+    if (targetsIndex >= 0) {
+      let removeCount = 0;
+      for (let i = targetsIndex + 1; i < block.length; i += 1) {
+        const line = block[i];
+        if (line.trim() === "") {
+          removeCount += 1;
+          continue;
+        }
+        const indent = line.match(/^(\s*)/)[1].length;
+        if (indent <= propIndent.length) {
+          break;
+        }
+        removeCount += 1;
+      }
+      if (removeCount) {
+        block.splice(targetsIndex + 1, removeCount);
+      }
+    }
+    if (!formatted) {
+      if (targetsIndex >= 0) {
+        block.splice(targetsIndex, 1);
+      }
+    } else {
+      const targetsLine = `${propIndent}targets: [${formatted}]`;
+      if (targetsIndex >= 0) {
+        block[targetsIndex] = targetsLine;
+      } else {
+        block.splice(1, 0, targetsLine);
+      }
+    }
+  }
+
+  const next = [...lines.slice(0, start), ...block, ...lines.slice(end)];
+  return next.join("\n");
+}
+
+function updateStepWithField(
+  content: string,
+  index: number,
+  key: string,
+  rawValue: string,
+  multiline: boolean,
+  allowEmpty = false
+) {
+  const data = getStepBlocks(content);
+  if (!data) return content;
+  if (index < 0 || index >= data.blocks.length) return content;
+
+  const block = [...data.blocks[index]];
+  const baseIndentMatch = block[0]?.match(/^(\s*)-/);
+  const baseIndent = baseIndentMatch ? baseIndentMatch[1] : "  ";
+  const propIndent = `${baseIndent}  `;
+  const withIndex = block.findIndex((line) => new RegExp(`^${propIndent}with\\s*:$`).test(line));
+  const trimmed = rawValue.trim();
+  const nextLines = buildWithFieldLines(key, trimmed, propIndent, multiline, allowEmpty);
+
+  if (withIndex === -1) {
+    if (!nextLines.length) return content;
+    block.push(`${propIndent}with:`);
+    block.push(...nextLines);
+    const nextBlocks = [...data.blocks];
+    nextBlocks[index] = block;
+    return rebuildStepsSection(data.lines, nextBlocks, data.sectionStart, data.sectionEnd);
+  }
+
+  const withIndent = propIndent.length;
+  let withEnd = withIndex + 1;
+  while (withEnd < block.length) {
+    const line = block[withEnd];
+    if (line.trim() === "") {
+      withEnd += 1;
+      continue;
+    }
+    const indent = line.match(/^(\s*)/)[1].length;
+    if (indent <= withIndent) {
+      break;
+    }
+    withEnd += 1;
+  }
+
+  const fieldIndent = `${propIndent}  `;
+  const fieldRegex = new RegExp(`^${fieldIndent}${escapeRegex(key)}\\s*:`);
+  const fieldIndex = block.findIndex((line, idx) => idx > withIndex && idx < withEnd && fieldRegex.test(line));
+
+  if (fieldIndex === -1) {
+    if (nextLines.length) {
+      block.splice(withEnd, 0, ...nextLines);
+    }
+  } else {
+    let fieldEnd = fieldIndex + 1;
+    while (fieldEnd < withEnd) {
+      const line = block[fieldEnd];
+      if (line.trim() === "") {
+        fieldEnd += 1;
+        continue;
+      }
+      const indent = line.match(/^(\s*)/)[1].length;
+      if (indent <= fieldIndent.length) {
+        break;
+      }
+      fieldEnd += 1;
+    }
+
+    if (nextLines.length) {
+      block.splice(fieldIndex, fieldEnd - fieldIndex, ...nextLines);
+    } else {
+      block.splice(fieldIndex, fieldEnd - fieldIndex);
+    }
+  }
+
+  const nextBlocks = [...data.blocks];
+  nextBlocks[index] = block;
+  return rebuildStepsSection(data.lines, nextBlocks, data.sectionStart, data.sectionEnd);
+}
+
+function updateStepEnvBlock(content: string, index: number, env: Record<string, string>) {
+  const data = getStepBlocks(content);
+  if (!data) return content;
+  if (index < 0 || index >= data.blocks.length) return content;
+
+  const block = [...data.blocks[index]];
+  const baseIndentMatch = block[0]?.match(/^(\s*)-/);
+  const baseIndent = baseIndentMatch ? baseIndentMatch[1] : "  ";
+  const propIndent = `${baseIndent}  `;
+  const withIndent = propIndent.length;
+  const withIndex = block.findIndex((line) => new RegExp(`^${propIndent}with\\s*:$`).test(line));
+
+  const envEntries = Object.entries(env).filter(([key]) => key.trim() !== "");
+  const envLines = envEntries.map(
+    ([key, value]) => `${propIndent}    ${key}: ${formatScalar(value)}`
+  );
+  const envBlock = envEntries.length
+    ? [`${propIndent}  env:`, ...envLines]
+    : [];
+
+  if (withIndex === -1) {
+    if (!envBlock.length) return content;
+    block.push(`${propIndent}with:`);
+    block.push(...envBlock);
+    const nextBlocks = [...data.blocks];
+    nextBlocks[index] = block;
+    return rebuildStepsSection(data.lines, nextBlocks, data.sectionStart, data.sectionEnd);
+  }
+
+  let withEnd = withIndex + 1;
+  while (withEnd < block.length) {
+    const line = block[withEnd];
+    if (line.trim() === "") {
+      withEnd += 1;
+      continue;
+    }
+    const indent = line.match(/^(\s*)/)[1].length;
+    if (indent <= withIndent) {
+      break;
+    }
+    withEnd += 1;
+  }
+
+  const envIndent = `${propIndent}  `;
+  const envIndex = block.findIndex(
+    (line, idx) =>
+      idx > withIndex &&
+      idx < withEnd &&
+      new RegExp(`^${envIndent}env\\s*:$`).test(line)
+  );
+
+  if (envIndex === -1) {
+    if (envBlock.length) {
+      block.splice(withEnd, 0, ...envBlock);
+    }
+  } else {
+    let envEnd = envIndex + 1;
+    while (envEnd < withEnd) {
+      const line = block[envEnd];
+      if (line.trim() === "") {
+        envEnd += 1;
+        continue;
+      }
+      const indent = line.match(/^(\s*)/)[1].length;
+      if (indent <= envIndent.length) {
+        break;
+      }
+      envEnd += 1;
+    }
+
+    if (envBlock.length) {
+      block.splice(envIndex, envEnd - envIndex, ...envBlock);
+    } else {
+      block.splice(envIndex, envEnd - envIndex);
+    }
+  }
+
+  const nextBlocks = [...data.blocks];
+  nextBlocks[index] = block;
+  return rebuildStepsSection(data.lines, nextBlocks, data.sectionStart, data.sectionEnd);
+}
+
+function updateStepVarsBlock(content: string, index: number, rawVars: string) {
+  const data = getStepBlocks(content);
+  if (!data) return content;
+  if (index < 0 || index >= data.blocks.length) return content;
+
+  const block = [...data.blocks[index]];
+  const baseIndentMatch = block[0]?.match(/^(\s*)-/);
+  const baseIndent = baseIndentMatch ? baseIndentMatch[1] : "  ";
+  const propIndent = `${baseIndent}  `;
+  const withIndent = propIndent.length;
+  const withIndex = block.findIndex((line) => new RegExp(`^${propIndent}with\\s*:$`).test(line));
+
+  const lines = rawVars.split(/\r?\n/);
+  const hasVars = lines.some((line) => line.trim() !== "");
+  const varsBlock = hasVars
+    ? [`${propIndent}  vars:`, ...lines.map((line) => `${propIndent}    ${line}`)]
+    : [];
+
+  if (withIndex === -1) {
+    if (!varsBlock.length) return content;
+    block.push(`${propIndent}with:`);
+    block.push(...varsBlock);
+    const nextBlocks = [...data.blocks];
+    nextBlocks[index] = block;
+    return rebuildStepsSection(data.lines, nextBlocks, data.sectionStart, data.sectionEnd);
+  }
+
+  let withEnd = withIndex + 1;
+  while (withEnd < block.length) {
+    const line = block[withEnd];
+    if (line.trim() === "") {
+      withEnd += 1;
+      continue;
+    }
+    const indent = line.match(/^(\s*)/)[1].length;
+    if (indent <= withIndent) {
+      break;
+    }
+    withEnd += 1;
+  }
+
+  const varsIndent = `${propIndent}  `;
+  const varsIndex = block.findIndex(
+    (line, idx) =>
+      idx > withIndex &&
+      idx < withEnd &&
+      new RegExp(`^${varsIndent}vars\\s*:`).test(line)
+  );
+
+  if (varsIndex === -1) {
+    if (varsBlock.length) {
+      block.splice(withEnd, 0, ...varsBlock);
+    }
+  } else {
+    let varsEnd = varsIndex + 1;
+    while (varsEnd < withEnd) {
+      const line = block[varsEnd];
+      if (line.trim() === "") {
+        varsEnd += 1;
+        continue;
+      }
+      const indent = line.match(/^(\s*)/)[1].length;
+      if (indent <= varsIndent.length) {
+        break;
+      }
+      varsEnd += 1;
+    }
+
+    if (varsBlock.length) {
+      block.splice(varsIndex, varsEnd - varsIndex, ...varsBlock);
+    } else {
+      block.splice(varsIndex, varsEnd - varsIndex);
+    }
+  }
+
+  const nextBlocks = [...data.blocks];
+  nextBlocks[index] = block;
+  return rebuildStepsSection(data.lines, nextBlocks, data.sectionStart, data.sectionEnd);
+}
+
+function duplicateStepBlock(content: string, index: number) {
+  const data = getStepBlocks(content);
+  if (!data) return content;
+  if (index < 0 || index >= data.blocks.length) return content;
+  const blocks = [...data.blocks];
+  const copy = [...blocks[index]];
+  blocks.splice(index + 1, 0, copy);
+  return rebuildStepsSection(data.lines, blocks, data.sectionStart, data.sectionEnd);
+}
+
+function deleteStepBlock(content: string, index: number) {
+  const data = getStepBlocks(content);
+  if (!data) return content;
+  if (index < 0 || index >= data.blocks.length) return content;
+  const blocks = [...data.blocks];
+  blocks.splice(index, 1);
+  return rebuildStepsSection(data.lines, blocks, data.sectionStart, data.sectionEnd);
+}
+
+function handleEntryAction(action?: ChatEntry["action"]) {
+  if (!action) return;
+  if (action === "summary") {
+    showSummaryModal.value = true;
+    return;
+  }
+  if (action === "fix") {
+    void runFix();
+  }
+}
+
+async function ensureChatSession() {
+  if (chatSessionId.value) return;
+  await createChatSession();
+}
+
+async function sendChatMessage(content: string) {
+  if (!chatSessionId.value) return;
+  chatPending.value = true;
+  try {
+    const data = await request<{ reply: ChatSessionMessage; session: ChatSession }>(
+      `/ai/chat/sessions/${chatSessionId.value}/messages`,
+      {
+        method: "POST",
+        body: { content }
+      }
+    );
+    if (data.reply?.content) {
+      pushChatEntry({
+        label: "AI",
+        body: data.reply.content,
+        type: "ai"
+      });
+    }
+    if (data.session?.title) {
+      chatSessionTitle.value = data.session.title;
+    }
+  } catch (err) {
+    pushChatEntry({
+      label: "系统",
+      body: "聊天回复失败，请检查服务是否启动",
+      type: "error",
+      extra: "ERROR"
+    });
+  } finally {
+    chatPending.value = false;
+  }
+}
+
+function focusStepInYaml(step: StepSummary) {
   const textarea = yamlRef.value;
   if (!textarea) return;
   const lines = yaml.value.split(/\r?\n/);
@@ -605,7 +2026,56 @@ function focusStep(step: StepSummary) {
   textarea.scrollTop = Math.max(0, lineIndex * lineHeight - lineHeight);
 }
 
-function appendStep() {
+function openStepYamlModal(index: number) {
+  const content = getVisualYaml();
+  const block = getStepBlock(content, index);
+  stepYamlIndex.value = index;
+  stepYamlText.value = block || "";
+  stepYamlError.value = "";
+  showStepYamlModal.value = true;
+}
+
+function closeStepYamlModal() {
+  showStepYamlModal.value = false;
+  stepYamlIndex.value = null;
+  stepYamlText.value = "";
+  stepYamlError.value = "";
+}
+
+function applyStepYamlChanges() {
+  if (stepYamlIndex.value === null) return;
+  const raw = stepYamlText.value;
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    stepYamlError.value = "步骤 YAML 不能为空";
+    return;
+  }
+  if (!/^\s*-\s*name\s*:/m.test(raw)) {
+    stepYamlError.value = "步骤 YAML 必须包含 - name";
+    return;
+  }
+  const next = replaceStepBlock(getVisualYaml(), stepYamlIndex.value, raw);
+  setVisualYaml(next);
+  closeStepYamlModal();
+}
+
+function focusYamlFromModal() {
+  const index = stepYamlIndex.value;
+  if (index === null) return;
+  const step = steps.value[index];
+  if (!step) return;
+  closeStepYamlModal();
+  workspaceTab.value = "yaml";
+  void nextTick(() => {
+    focusStepInYaml(step);
+  });
+}
+
+function selectStep(index: number) {
+  selectedStepIndex.value = index;
+}
+
+function appendStep(action = "cmd.run") {
   const baseName = "新建步骤";
   const existingNames = steps.value.map((step) => step.name).filter(Boolean);
   let suffix = 1;
@@ -614,23 +2084,19 @@ function appendStep() {
     suffix += 1;
     stepName = `${baseName} ${suffix}`;
   }
-  const baseLines = [
-    `- name: ${stepName}`,
-    "  action: cmd.run",
-    "  targets: []",
-    "  cmd: echo '待补充'"
-  ];
-  const trimmed = yaml.value.trim();
+  const baseLines = buildStepSnippet(stepName, action, targetSelections.value);
+  const content = getVisualYaml();
+  const trimmed = content.trim();
   if (!trimmed) {
     const indented = baseLines.map((line) => `  ${line}`).join("\n");
-    yaml.value = `steps:\n${indented}`;
+    setVisualYaml(`steps:\n${indented}`);
     return;
   }
-  const lines = yaml.value.split(/\r?\n/);
+  const lines = content.split(/\r?\n/);
   const stepsIndex = lines.findIndex((line) => /^\s*steps\s*:/.test(line));
   if (stepsIndex < 0) {
     const indented = baseLines.map((line) => `  ${line}`).join("\n");
-    yaml.value = `${trimmed}\n\nsteps:\n${indented}`;
+    setVisualYaml(`${trimmed}\n\nsteps:\n${indented}`);
     return;
   }
   const stepsIndent = lines[stepsIndex].match(/^(\s*)/)[1].length;
@@ -653,7 +2119,7 @@ function appendStep() {
     }
   }
   lines.splice(insertAt, 0, ...stepLines);
-  yaml.value = lines.join("\n");
+  setVisualYaml(lines.join("\n"));
 }
 
 function buildContext() {
@@ -668,8 +2134,8 @@ function buildContext() {
   if (environmentNote.value.trim()) {
     payload.environment = environmentNote.value.trim();
   }
-  if (targetHint.value.trim()) {
-    payload.targets = targetHint.value.trim();
+  if (targetSelections.value.length) {
+    payload.targets = [...targetSelections.value];
   }
   if (packages.length) {
     payload.env_packages = packages;
@@ -681,16 +2147,19 @@ function buildContext() {
 }
 
 async function startStream() {
-  if (!prompt.value.trim()) return;
-  pushChatEntry({ label: "用户", body: prompt.value.trim(), type: "user" });
+  const message = prompt.value.trim();
+  if (!message) return;
+  await ensureChatSession();
+  pushChatEntry({ label: "用户", body: message, type: "user" });
   showExamples.value = false;
+  void sendChatMessage(message);
   busy.value = true;
   streamError.value = "";
   progressEvents.value = [];
   executeResult.value = null;
   const payload = {
     mode: "generate",
-    prompt: prompt.value.trim(),
+    prompt: message,
     context: buildContext(),
     env: selectedValidationEnv.value || undefined,
     execute: executeEnabled.value,
@@ -792,18 +2261,14 @@ function applyResult(payload: Record<string, unknown>) {
   summary.value.riskLevel = String(payload.risk_level || "");
   summary.value.needsReview = Boolean(payload.needs_review);
   summary.value.issues = Array.isArray(payload.issues) ? payload.issues : [];
-  const summaryText = typeof payload.summary === "string" && payload.summary.trim()
-    ? payload.summary.trim()
-    : "草稿已生成";
-  const riskText = payload.risk_level ? `风险 ${payload.risk_level}` : "";
   const issueCount = Array.isArray(payload.issues) ? payload.issues.length : 0;
-  const issueText = issueCount ? `问题 ${issueCount}` : "";
-  const resultBody = [summaryText, riskText, issueText].filter(Boolean).join(" · ");
   pushChatEntry({
-    label: "AI",
-    body: resultBody || "草稿已生成",
+    label: "需求摘要",
+    body: issueCount ? `已更新，待确认 ${issueCount} 项。` : "已更新，点击查看详情。",
     type: issueCount ? "warn" : "ai",
-    extra: "DONE"
+    extra: "DONE",
+    action: "summary",
+    actionLabel: "查看摘要"
   });
   if (Array.isArray(payload.history)) {
     history.value = payload.history.filter((item) => typeof item === "string");
@@ -813,7 +2278,7 @@ function applyResult(payload: Record<string, unknown>) {
   }
   humanConfirmed.value = false;
   confirmReason.value = "";
-  selectedStep.value = "";
+  selectedStepIndex.value = null;
   void refreshSummary();
 }
 
@@ -844,6 +2309,8 @@ async function refreshSummary() {
 
 async function validateDraft() {
   if (!yaml.value.trim()) return;
+  if (!ensureYamlSynced()) return;
+  validationTouched.value = true;
   validationBusy.value = true;
   try {
     const data = await request<{ ok: boolean; issues?: string[] }>("/workflows/_draft/validate", {
@@ -858,7 +2325,9 @@ async function validateDraft() {
       label: "校验",
       body: data.ok ? `校验通过：${issueText}` : `校验失败：${issueText}`,
       type: data.ok ? "ai" : "warn",
-      extra: data.ok ? "OK" : "WARN"
+      extra: data.ok ? "OK" : "WARN",
+      action: data.ok ? undefined : "fix",
+      actionLabel: data.ok ? undefined : "一键修复"
     });
   } catch (err) {
     const apiErr = err as ApiError;
@@ -880,6 +2349,7 @@ async function validateDraft() {
 
 async function runExecution() {
   if (!yaml.value.trim()) return;
+  if (!ensureYamlSynced()) return;
   executeBusy.value = true;
   executeResult.value = null;
   try {
@@ -913,20 +2383,61 @@ async function runExecution() {
   }
 }
 
-async function saveWorkflow() {
+async function runFix() {
+  if (!yaml.value.trim()) return;
+  if (!ensureYamlSynced()) return;
+  const issues = validation.value.issues.length ? validation.value.issues : summary.value.issues;
+  if (!issues.length) {
+    pushChatEntry({
+      label: "系统",
+      body: "暂无可修复的问题。",
+      type: "warn",
+      extra: "INFO"
+    });
+    return;
+  }
+  busy.value = true;
+  streamError.value = "";
+  progressEvents.value = [];
+  executeResult.value = null;
+  pushChatEntry({
+    label: "系统",
+    body: "开始修复草稿...",
+    type: "ai",
+    extra: "FIX"
+  });
+  const payload = {
+    mode: "fix",
+    yaml: yaml.value,
+    issues,
+    context: buildContext(),
+    env: selectedValidationEnv.value || undefined,
+    execute: executeEnabled.value,
+    max_retries: maxRetries.value,
+    draft_id: draftId.value || undefined
+  };
+  try {
+    await streamWorkflow(payload);
+  } finally {
+    busy.value = false;
+  }
+}
+
+async function saveWorkflow(name?: string) {
   if (requiresConfirm.value) {
     window.alert(requiresReason.value ? "需要人工确认并填写原因后才能保存" : "需要人工确认后才能保存");
     return;
   }
-  const name = window.prompt("请输入工作流名称（字母/数字/短横线/下划线）");
-  if (!name) return;
-  const trimmed = name.trim();
-  if (!/^[a-zA-Z0-9_-]+$/.test(trimmed)) {
-    window.alert("名称格式不正确，仅支持字母、数字、短横线、下划线");
+  if (!ensureYamlSynced()) return;
+  const trimmed = (name || saveName.value).trim();
+  const validationError = validateWorkflowName(trimmed);
+  if (validationError) {
+    saveError.value = validationError;
     return;
   }
+  saveError.value = "";
   const reason = confirmReason.value.trim();
-  busy.value = true;
+  saveBusy.value = true;
   try {
     await request(`/workflows/${trimmed}`, {
       method: "PUT",
@@ -934,12 +2445,14 @@ async function saveWorkflow() {
     });
     draftId.value = "";
     confirmReason.value = "";
+    saveError.value = "";
+    showSaveModal.value = false;
     await router.push({ name: "workflow", params: { name: trimmed } });
   } catch (err) {
     const apiErr = err as ApiError;
-    streamError.value = apiErr.message ? `保存失败: ${apiErr.message}` : "保存失败，请检查服务是否启动";
+    saveError.value = apiErr.message ? `保存失败: ${apiErr.message}` : "保存失败，请检查服务是否启动";
   } finally {
-    busy.value = false;
+    saveBusy.value = false;
   }
 }
 
@@ -949,7 +2462,7 @@ function restoreHistory(index: number) {
     yaml.value = snapshot;
     humanConfirmed.value = false;
     confirmReason.value = "";
-    selectedStep.value = "";
+    selectedStepIndex.value = null;
   }
 }
 
@@ -1019,6 +2532,7 @@ function diffSummary(prev: string, next: string) {
   color: var(--ink);
   flex: 1;
   min-height: 0;
+  background: radial-gradient(1200px 600px at 10% 0%, #fff7ee 0%, #f3ece2 45%, #efe7db 100%);
 }
 
 .main-grid {
@@ -1031,7 +2545,7 @@ function diffSummary(prev: string, next: string) {
 }
 
 .panel {
-  background: var(--panel);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.82));
   border-radius: 20px;
   border: 1px solid rgba(27, 27, 27, 0.08);
   box-shadow: var(--shadow);
@@ -1040,6 +2554,7 @@ function diffSummary(prev: string, next: string) {
   flex-direction: column;
   gap: 16px;
   min-height: 0;
+  backdrop-filter: blur(6px);
 }
 
 .panel-head {
@@ -1070,6 +2585,31 @@ function diffSummary(prev: string, next: string) {
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+.sync-controls {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.sync-label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.sync-tag {
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: rgba(27, 27, 27, 0.08);
+  color: var(--muted);
+}
+
+.sync-tag.warn {
+  color: var(--warn);
+  background: rgba(230, 167, 0, 0.12);
 }
 
 .draft-stats {
@@ -1159,9 +2699,46 @@ function diffSummary(prev: string, next: string) {
 
 .timeline-item {
   padding: 12px 14px;
-  background: rgba(255, 255, 255, 0.4);
+  background: rgba(255, 255, 255, 0.68);
   border-radius: 14px;
   border: 1px solid rgba(27, 27, 27, 0.08);
+  max-width: 85%;
+  animation: fade-up 0.35s ease;
+}
+
+.timeline-item.user {
+  align-self: flex-end;
+  background: rgba(46, 111, 227, 0.08);
+  border-color: rgba(46, 111, 227, 0.2);
+}
+
+.timeline-item.ai {
+  align-self: flex-start;
+  background: rgba(42, 157, 75, 0.08);
+  border-color: rgba(42, 157, 75, 0.2);
+}
+
+.timeline-item.warn {
+  align-self: flex-start;
+  background: rgba(230, 167, 0, 0.12);
+  border-color: rgba(230, 167, 0, 0.2);
+}
+
+.timeline-item.error {
+  align-self: flex-start;
+  background: rgba(208, 52, 44, 0.12);
+  border-color: rgba(208, 52, 44, 0.2);
+}
+
+.timeline-item.typing {
+  opacity: 0.7;
+  font-style: italic;
+}
+
+.timeline-actions {
+  margin-top: 8px;
+  display: flex;
+  justify-content: flex-start;
 }
 
 .timeline-header {
@@ -1204,6 +2781,27 @@ function diffSummary(prev: string, next: string) {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.pending-questions {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px dashed rgba(27, 27, 27, 0.12);
+  background: rgba(255, 255, 255, 0.7);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.pending-title {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pending-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 
 .chat-toolbar {
@@ -1295,6 +2893,12 @@ textarea {
 .btn.ghost {
   background: transparent;
   color: var(--muted);
+}
+
+.btn.danger {
+  background: rgba(208, 52, 44, 0.12);
+  border-color: rgba(208, 52, 44, 0.2);
+  color: var(--err);
 }
 
 .btn.btn-sm {
@@ -1406,16 +3010,36 @@ textarea {
   flex-wrap: wrap;
 }
 
+.visual-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+  gap: 16px;
+  min-height: 0;
+}
+
 .steps-section {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  min-height: 0;
 }
 
 .steps-head {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.steps-head-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.step-action-select {
+  min-width: 140px;
 }
 
 .step-count {
@@ -1426,6 +3050,9 @@ textarea {
 .steps-list {
   display: grid;
   gap: 10px;
+  overflow: auto;
+  min-height: 0;
+  padding-right: 2px;
 }
 
 .step-card {
@@ -1435,12 +3062,17 @@ textarea {
   background: #fff;
   cursor: pointer;
   text-align: left;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+  animation: fade-up 0.35s ease;
 }
 
 .step-card.active {
   border-color: rgba(46, 111, 227, 0.4);
   box-shadow: 0 0 0 2px rgba(46, 111, 227, 0.15);
+}
+
+.step-card:hover {
+  transform: translateY(-1px);
 }
 
 .step-card.error {
@@ -1453,6 +3085,13 @@ textarea {
   outline-offset: 2px;
 }
 
+.step-card-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+}
+
 .step-name {
   font-weight: 600;
 }
@@ -1461,6 +3100,88 @@ textarea {
 .step-targets {
   font-size: 12px;
   color: var(--muted);
+}
+
+.step-status {
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border: 1px solid transparent;
+}
+
+.step-status.draft {
+  color: var(--muted);
+  background: rgba(27, 27, 27, 0.06);
+  border-color: rgba(27, 27, 27, 0.08);
+}
+
+.step-status.validated {
+  color: var(--ok);
+  background: rgba(42, 157, 75, 0.12);
+  border-color: rgba(42, 157, 75, 0.2);
+}
+
+.step-status.failed {
+  color: var(--err);
+  background: rgba(208, 52, 44, 0.12);
+  border-color: rgba(208, 52, 44, 0.2);
+}
+
+.step-status.risky {
+  color: var(--warn);
+  background: rgba(230, 167, 0, 0.12);
+  border-color: rgba(230, 167, 0, 0.2);
+}
+
+.step-status.unsynced {
+  color: var(--info);
+  background: rgba(46, 111, 227, 0.12);
+  border-color: rgba(46, 111, 227, 0.2);
+}
+
+.step-summary {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.step-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.step-detail-panel {
+  border-radius: 16px;
+  border: 1px solid rgba(27, 27, 27, 0.08);
+  padding: 14px;
+  background: rgba(255, 255, 255, 0.7);
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.detail-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-height: 0;
+}
+
+.detail-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.detail-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .code {
@@ -1527,6 +3248,11 @@ textarea {
   gap: 12px;
 }
 
+.history-item.active {
+  border-color: rgba(46, 111, 227, 0.4);
+  box-shadow: 0 0 0 2px rgba(46, 111, 227, 0.12);
+}
+
 .history-title {
   font-weight: 600;
   margin-bottom: 2px;
@@ -1535,6 +3261,22 @@ textarea {
 .history-diff {
   font-size: 11px;
   color: var(--muted);
+}
+
+.session-meta {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.session-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.session-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 .history-restore {
@@ -1643,7 +3385,9 @@ textarea {
 
 .summary-modal,
 .config-modal,
-.history-modal {
+.history-modal,
+.yaml-modal,
+.save-modal {
   width: min(560px, 100%);
   background: #fff;
   border-radius: 18px;
@@ -1682,6 +3426,14 @@ textarea {
   line-height: 1.6;
 }
 
+.sync-note {
+  padding: 8px 10px;
+  border-radius: 10px;
+  font-size: 12px;
+  color: var(--warn);
+  background: rgba(230, 167, 0, 0.12);
+}
+
 .modal-grid {
   display: grid;
   gap: 10px;
@@ -1715,6 +3467,71 @@ textarea {
   gap: 6px;
   font-size: 12px;
   color: var(--muted);
+}
+
+.field-hint {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.tag-input {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  padding: 6px;
+  border-radius: 12px;
+  border: 1px solid rgba(27, 27, 27, 0.12);
+  background: #fff;
+  min-height: 40px;
+}
+
+.tag-input input {
+  border: none;
+  padding: 4px 6px;
+  min-width: 120px;
+  flex: 1;
+  width: auto;
+  background: transparent;
+  font-family: "IBM Plex Mono", "Space Grotesk", sans-serif;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(27, 27, 27, 0.1);
+  background: #f3eee7;
+  font-size: 11px;
+  color: var(--ink);
+}
+
+.tag-remove {
+  border: none;
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.suggestions {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.suggestions-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.suggestions-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 
 .toggle-row {
@@ -1752,10 +3569,25 @@ textarea {
   color: var(--muted);
 }
 
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 @media (max-width: 980px) {
   .main-grid {
     grid-template-columns: 1fr;
     grid-template-rows: auto;
+  }
+
+  .visual-grid {
+    grid-template-columns: 1fr;
   }
 
   .draft-stats {

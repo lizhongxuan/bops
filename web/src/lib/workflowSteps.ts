@@ -16,6 +16,7 @@ export type StepSummary = {
   withName?: string;
   src?: string;
   dest?: string;
+  vars?: string;
   state?: string;
   required?: string;
   line?: number;
@@ -32,12 +33,18 @@ export function parseSteps(content: string) {
   let inScriptBlock = false;
   let scriptIndent = 0;
   let scriptLines: string[] = [];
+  let inVarsBlock = false;
+  let varsIndent = 0;
+  let varsLines: string[] = [];
   let inCmdBlock = false;
   let cmdIndent = 0;
   let cmdLines: string[] = [];
   let inTargets = false;
   let targetsIndent = 0;
   let targetItems: string[] = [];
+  let inNames = false;
+  let namesIndent = 0;
+  let nameItems: string[] = [];
 
   const flushScript = () => {
     if (current && scriptLines.length) {
@@ -53,11 +60,25 @@ export function parseSteps(content: string) {
     cmdLines = [];
   };
 
+  const flushVars = () => {
+    if (current && varsLines.length) {
+      current.vars = varsLines.join("\n").trim();
+    }
+    varsLines = [];
+  };
+
   const flushTargets = () => {
     if (current && targetItems.length) {
       current.targets = `[${targetItems.join(", ")}]`;
     }
     targetItems = [];
+  };
+
+  const flushNames = () => {
+    if (current && nameItems.length) {
+      current.withName = nameItems.join(", ");
+    }
+    nameItems = [];
   };
 
   for (let index = 0; index < lines.length; index += 1) {
@@ -70,8 +91,14 @@ export function parseSteps(content: string) {
       if (inCmdBlock) {
         flushCmd();
       }
+      if (inVarsBlock) {
+        flushVars();
+      }
       if (inTargets) {
         flushTargets();
+      }
+      if (inNames) {
+        flushNames();
       }
       current = {
         name: nameMatch[1].trim(),
@@ -85,6 +112,7 @@ export function parseSteps(content: string) {
         withName: "",
         src: "",
         dest: "",
+        vars: "",
         state: "",
         required: "",
         line: index
@@ -93,7 +121,9 @@ export function parseSteps(content: string) {
       inWith = false;
       inEnv = false;
       inScriptBlock = false;
+      inVarsBlock = false;
       inTargets = false;
+      inNames = false;
       continue;
     }
     if (!current) {
@@ -130,6 +160,21 @@ export function parseSteps(content: string) {
       }
     }
 
+    if (inVarsBlock) {
+      const indent = line.match(/^(\s*)/)[1].length;
+      if (line.trim() === "") {
+        varsLines.push("");
+        continue;
+      }
+      if (indent <= varsIndent) {
+        flushVars();
+        inVarsBlock = false;
+      } else {
+        varsLines.push(line.slice(varsIndent));
+        continue;
+      }
+    }
+
     if (inTargets) {
       const indent = line.match(/^(\s*)/)[1].length;
       if (line.trim() === "") {
@@ -142,6 +187,23 @@ export function parseSteps(content: string) {
         const itemMatch = line.match(/^\s*-\s*(.+)$/);
         if (itemMatch) {
           targetItems.push(stripQuotes(itemMatch[1].trim()));
+        }
+        continue;
+      }
+    }
+
+    if (inNames) {
+      const indent = line.match(/^(\s*)/)[1].length;
+      if (line.trim() === "") {
+        continue;
+      }
+      if (indent <= namesIndent) {
+        flushNames();
+        inNames = false;
+      } else {
+        const itemMatch = line.match(/^\s*-\s*(.+)$/);
+        if (itemMatch) {
+          nameItems.push(stripQuotes(itemMatch[1].trim()));
         }
         continue;
       }
@@ -210,6 +272,17 @@ export function parseSteps(content: string) {
           if (withNameMatch) {
             current.withName = stripQuotes(withNameMatch[1].trim());
           }
+          const namesBlockMatch = line.match(/^(\s*)names\s*:\s*$/);
+          if (namesBlockMatch) {
+            inNames = true;
+            namesIndent = namesBlockMatch[1].length;
+            nameItems = [];
+            continue;
+          }
+          const namesMatch = line.match(/^\s*names\s*:\s*(.+)$/);
+          if (namesMatch) {
+            current.withName = stripQuotes(namesMatch[1].trim());
+          }
           const srcMatch = line.match(/^\s*src\s*:\s*(.+)$/);
           if (srcMatch) {
             current.src = stripQuotes(srcMatch[1].trim());
@@ -236,6 +309,17 @@ export function parseSteps(content: string) {
               scriptLines = [];
             } else {
               current.script = stripQuotes(value);
+            }
+          }
+          const varsMatch = line.match(/^\s*vars\s*:\s*(.*)$/);
+          if (varsMatch) {
+            const value = varsMatch[1].trim();
+            if (!value || value.startsWith("|") || value.startsWith(">")) {
+              inVarsBlock = true;
+              varsIndent = line.match(/^(\s*)/)[1].length + 2;
+              varsLines = [];
+            } else {
+              current.vars = stripQuotes(value);
             }
           }
         }
@@ -290,6 +374,12 @@ export function parseSteps(content: string) {
   }
   if (inTargets) {
     flushTargets();
+  }
+  if (inNames) {
+    flushNames();
+  }
+  if (inVarsBlock) {
+    flushVars();
   }
 
   return steps.map((step) => ({

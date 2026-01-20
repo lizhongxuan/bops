@@ -9,6 +9,7 @@ export type StepWith = {
   scriptRef?: string;
   packages?: string;
   envText?: string;
+  vars?: string;
 };
 
 export type DraftStep = {
@@ -30,6 +31,7 @@ export function createDefaultStepWith(action?: string): StepWith {
     script: "",
     scriptRef: "",
     packages: "",
-    envText: ""
+    envText: "",
+    vars: ""
   };
 }

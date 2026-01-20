@@ -37,6 +37,15 @@
         <label>工作目录</label>
         <input :value="step.with.dir" @input="updateWithField('dir', $event.target.value)" type="text" placeholder="/opt/app" />
       </div>
+      <div class="field">
+        <label>环境变量 (KEY=VALUE 每行一条)</label>
+        <textarea
+          :value="step.with.envText"
+          @input="updateWithField('envText', $event.target.value)"
+          rows="3"
+          placeholder="TOKEN=abc123"
+        />
+      </div>
     </template>
 
     <template v-else-if="step.action === 'pkg.install'">
@@ -59,6 +68,15 @@
       <div class="field">
         <label>输出路径</label>
         <input :value="step.with.dest" @input="updateWithField('dest', $event.target.value)" type="text" placeholder="/etc/nginx/nginx.conf" />
+      </div>
+      <div class="field">
+        <label>模板变量 (YAML/JSON)</label>
+        <textarea
+          :value="step.with.vars"
+          @input="updateWithField('vars', $event.target.value)"
+          rows="3"
+          placeholder="key: value"
+        />
       </div>
     </template>
 
