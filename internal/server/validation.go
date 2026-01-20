@@ -165,7 +165,7 @@ func (s *Server) handleValidationRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, runErr := validationrun.Run(r.Context(), env, req.YAML)
+	result, runErr := validationrun.Runner(r.Context(), env, req.YAML)
 	resp := validationRunResponse{
 		Status: result.Status,
 		Stdout: result.Stdout,
@@ -176,5 +176,16 @@ func (s *Server) handleValidationRun(w http.ResponseWriter, r *http.Request) {
 		resp.Status = "failed"
 		resp.Error = runErr.Error()
 	}
+	s.recordValidationAudit(validationAuditEntry{
+		Source:    "validation-run",
+		Workflow:  "",
+		Env:       env.Name,
+		EnvType:   string(env.Type),
+		Status:    resp.Status,
+		Code:      resp.Code,
+		Error:     resp.Error,
+		YAMLHash:  hashYAML(req.YAML),
+		StepCount: countStepsInYAML(req.YAML),
+	})
 	writeJSON(w, http.StatusOK, resp)
 }

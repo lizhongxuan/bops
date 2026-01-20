@@ -32,6 +32,8 @@ func Run(ctx context.Context, env validationenv.ValidationEnv, yaml string) (Res
 	}
 }
 
+var Runner = Run
+
 func runInContainer(ctx context.Context, env validationenv.ValidationEnv, yaml string) (Result, error) {
 	if strings.TrimSpace(env.Image) == "" {
 		return Result{}, fmt.Errorf("container image is required")

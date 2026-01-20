@@ -1,0 +1,5 @@
+./client.go
+./gemini.go
+./model.go
+./openai.go
+./prompt.go

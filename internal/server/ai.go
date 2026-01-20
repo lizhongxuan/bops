@@ -8,6 +8,11 @@ import (
 
 	"bops/internal/ai"
 	"bops/internal/aistore"
+	"bops/internal/aiworkflow"
+	"bops/internal/aiworkflowstore"
+	"bops/internal/validationenv"
+	"bops/internal/validationrun"
+	"bops/internal/workflow"
 )
 
 const maxChatContextMessages = 20
@@ -37,16 +42,66 @@ type aiChatResponse struct {
 type aiGenerateRequest struct {
 	Prompt  string         `json:"prompt"`
 	Context map[string]any `json:"context,omitempty"`
+	DraftID string         `json:"draft_id,omitempty"`
 }
 
 type aiGenerateResponse struct {
 	YAML    string `json:"yaml"`
 	Message string `json:"message,omitempty"`
+	DraftID string `json:"draft_id,omitempty"`
 }
 
 type aiFixRequest struct {
-	YAML   string   `json:"yaml"`
+	YAML    string   `json:"yaml"`
+	Issues  []string `json:"issues,omitempty"`
+	DraftID string   `json:"draft_id,omitempty"`
+}
+
+type aiValidateRequest struct {
+	YAML string `json:"yaml"`
+}
+
+type aiValidateResponse struct {
+	OK     bool     `json:"ok"`
 	Issues []string `json:"issues,omitempty"`
+}
+
+type aiExecuteRequest struct {
+	YAML string `json:"yaml"`
+	Env  string `json:"env,omitempty"`
+}
+
+type aiExecuteResponse struct {
+	Status string `json:"status"`
+	Stdout string `json:"stdout,omitempty"`
+	Stderr string `json:"stderr,omitempty"`
+	Code   int    `json:"code,omitempty"`
+	Error  string `json:"error,omitempty"`
+}
+
+type aiSummaryRequest struct {
+	YAML string `json:"yaml"`
+}
+
+type aiSummaryResponse struct {
+	Summary     string   `json:"summary"`
+	Steps       int      `json:"steps"`
+	RiskLevel   string   `json:"risk_level"`
+	RiskNotes   []string `json:"risk_notes,omitempty"`
+	Issues      []string `json:"issues,omitempty"`
+	NeedsReview bool     `json:"needs_review"`
+}
+
+type aiStreamRequest struct {
+	Mode       string         `json:"mode,omitempty"`
+	Prompt     string         `json:"prompt,omitempty"`
+	YAML       string         `json:"yaml,omitempty"`
+	Issues     []string       `json:"issues,omitempty"`
+	Context    map[string]any `json:"context,omitempty"`
+	Env        string         `json:"env,omitempty"`
+	Execute    bool           `json:"execute,omitempty"`
+	MaxRetries int            `json:"max_retries,omitempty"`
+	DraftID    string         `json:"draft_id,omitempty"`
 }
 
 func (s *Server) handleAIChatSessions(w http.ResponseWriter, r *http.Request) {
@@ -172,7 +227,7 @@ func (s *Server) handleAIWorkflowGenerate(w http.ResponseWriter, r *http.Request
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if s.aiClient == nil {
+	if s.aiWorkflow == nil {
 		writeError(w, http.StatusServiceUnavailable, "ai provider is not configured")
 		return
 	}
@@ -193,22 +248,23 @@ func (s *Server) handleAIWorkflowGenerate(w http.ResponseWriter, r *http.Request
 	}
 
 	contextText := s.buildContextText(req.Context)
-	messages := []ai.Message{{
-		Role:    "system",
-		Content: s.systemPrompt(contextText),
-	}, {
-		Role:    "user",
-		Content: strings.TrimSpace(req.Prompt),
-	}}
-
-	reply, err := s.aiClient.Chat(r.Context(), messages)
+	state, err := s.aiWorkflow.RunGenerate(r.Context(), strings.TrimSpace(req.Prompt), req.Context, aiworkflow.RunOptions{
+		SystemPrompt:  s.systemPrompt(contextText),
+		ContextText:   contextText,
+		ValidationEnv: s.defaultValidationEnv(),
+		SkipExecute:   true,
+	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	yaml := ai.ExtractYAML(reply)
-	writeJSON(w, http.StatusOK, aiGenerateResponse{YAML: yaml})
+	draftID := s.saveAIDraft(req.DraftID, titleFromMessage(req.Prompt), req.Prompt, state)
+	writeJSON(w, http.StatusOK, aiGenerateResponse{
+		YAML:    state.YAML,
+		Message: state.Summary,
+		DraftID: draftID,
+	})
 }
 
 func (s *Server) handleAIWorkflowFix(w http.ResponseWriter, r *http.Request) {
@@ -216,7 +272,7 @@ func (s *Server) handleAIWorkflowFix(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	if s.aiClient == nil {
+	if s.aiWorkflow == nil {
 		writeError(w, http.StatusServiceUnavailable, "ai provider is not configured")
 		return
 	}
@@ -236,23 +292,395 @@ func (s *Server) handleAIWorkflowFix(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	prompt := buildFixPrompt(req.YAML, req.Issues)
-	messages := []ai.Message{{
-		Role:    "system",
-		Content: s.systemPrompt(""),
-	}, {
-		Role:    "user",
-		Content: prompt,
-	}}
-
-	reply, err := s.aiClient.Chat(r.Context(), messages)
+	state, err := s.aiWorkflow.RunFix(r.Context(), req.YAML, req.Issues, aiworkflow.RunOptions{
+		SystemPrompt:  s.systemPrompt(""),
+		ValidationEnv: s.defaultValidationEnv(),
+		SkipExecute:   true,
+	})
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	yaml := ai.ExtractYAML(reply)
-	writeJSON(w, http.StatusOK, aiGenerateResponse{YAML: yaml})
+	title := ""
+	if strings.TrimSpace(req.DraftID) == "" {
+		title = "AI Fix"
+	}
+	draftID := s.saveAIDraft(req.DraftID, title, "", state)
+	writeJSON(w, http.StatusOK, aiGenerateResponse{
+		YAML:    state.YAML,
+		Message: state.Summary,
+		DraftID: draftID,
+	})
+}
+
+func (s *Server) handleAIWorkflowValidate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	body, err := readBody(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req aiValidateRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json payload")
+		return
+	}
+	if strings.TrimSpace(req.YAML) == "" {
+		writeError(w, http.StatusBadRequest, "yaml is required")
+		return
+	}
+
+	resp := aiValidateResponse{OK: true}
+	wf, err := workflow.Load([]byte(req.YAML))
+	if err != nil {
+		resp.OK = false
+		resp.Issues = []string{err.Error()}
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
+	if err := wf.Validate(); err != nil {
+		resp.OK = false
+		if vErr, ok := err.(*workflow.ValidationError); ok {
+			resp.Issues = vErr.Issues
+		} else {
+			resp.Issues = []string{err.Error()}
+		}
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleAIWorkflowExecute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	body, err := readBody(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req aiExecuteRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json payload")
+		return
+	}
+	if strings.TrimSpace(req.YAML) == "" {
+		writeError(w, http.StatusBadRequest, "yaml is required")
+		return
+	}
+
+	var env *validationenv.ValidationEnv
+	if strings.TrimSpace(req.Env) != "" && s.validationStore != nil {
+		if resolved, _, err := s.validationStore.Get(req.Env); err == nil {
+			env = &resolved
+		}
+	}
+	if env == nil {
+		env = s.defaultValidationEnv()
+	}
+	if env == nil {
+		writeError(w, http.StatusBadRequest, "validation env is required")
+		return
+	}
+
+	result, runErr := validationrun.Runner(r.Context(), *env, req.YAML)
+	resp := aiExecuteResponse{
+		Status: result.Status,
+		Stdout: result.Stdout,
+		Stderr: result.Stderr,
+		Code:   result.Code,
+	}
+	if runErr != nil {
+		resp.Status = "failed"
+		resp.Error = runErr.Error()
+	}
+	s.recordValidationAudit(validationAuditEntry{
+		Source:    "ai-workflow",
+		Env:       env.Name,
+		EnvType:   string(env.Type),
+		Status:    resp.Status,
+		Code:      resp.Code,
+		Error:     resp.Error,
+		YAMLHash:  hashYAML(req.YAML),
+		StepCount: countStepsInYAML(req.YAML),
+	})
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (s *Server) handleAIWorkflowSummary(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	body, err := readBody(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req aiSummaryRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json payload")
+		return
+	}
+	if strings.TrimSpace(req.YAML) == "" {
+		writeError(w, http.StatusBadRequest, "yaml is required")
+		return
+	}
+
+	riskLevel, riskNotes := aiworkflow.EvaluateRisk(req.YAML, aiworkflow.DefaultRiskRules())
+	issues := []string{}
+	ok := true
+	if wf, err := workflow.Load([]byte(req.YAML)); err != nil {
+		ok = false
+		issues = []string{err.Error()}
+	} else if err := wf.Validate(); err != nil {
+		ok = false
+		if vErr, okCast := err.(*workflow.ValidationError); okCast {
+			issues = vErr.Issues
+		} else {
+			issues = []string{err.Error()}
+		}
+	}
+
+	steps := countStepsInYAML(req.YAML)
+	needsReview := !ok || riskLevel != aiworkflow.RiskLevelLow
+	summary := fmt.Sprintf("steps=%d risk=%s issues=%d", steps, riskLevel, len(issues))
+
+	writeJSON(w, http.StatusOK, aiSummaryResponse{
+		Summary:     summary,
+		Steps:       steps,
+		RiskLevel:   string(riskLevel),
+		RiskNotes:   riskNotes,
+		Issues:      issues,
+		NeedsReview: needsReview,
+	})
+}
+
+func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	if s.aiWorkflow == nil {
+		writeError(w, http.StatusServiceUnavailable, "ai provider is not configured")
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "streaming unsupported")
+		return
+	}
+
+	body, err := readBody(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req aiStreamRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid json payload")
+		return
+	}
+
+	mode := strings.TrimSpace(req.Mode)
+	if mode == "" {
+		mode = string(aiworkflow.ModeGenerate)
+	}
+	if mode == string(aiworkflow.ModeGenerate) && strings.TrimSpace(req.Prompt) == "" {
+		writeError(w, http.StatusBadRequest, "prompt is required")
+		return
+	}
+	if mode == string(aiworkflow.ModeFix) && strings.TrimSpace(req.YAML) == "" {
+		writeError(w, http.StatusBadRequest, "yaml is required")
+		return
+	}
+
+	var env *validationenv.ValidationEnv
+	if strings.TrimSpace(req.Env) != "" && s.validationStore != nil {
+		if resolved, _, err := s.validationStore.Get(req.Env); err == nil {
+			env = &resolved
+		}
+	}
+	if env == nil {
+		env = s.defaultValidationEnv()
+	}
+	envName := ""
+	envType := ""
+	if env != nil {
+		envName = env.Name
+		envType = string(env.Type)
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	ctx := r.Context()
+	events := make(chan aiworkflow.Event, 16)
+	type streamResult struct {
+		state *aiworkflow.State
+		err   error
+	}
+	resultCh := make(chan streamResult, 1)
+
+	sink := func(evt aiworkflow.Event) {
+		select {
+		case events <- evt:
+		case <-ctx.Done():
+		}
+	}
+
+	contextText := s.buildContextText(req.Context)
+	opts := aiworkflow.RunOptions{
+		SystemPrompt:  s.systemPrompt(contextText),
+		ContextText:   contextText,
+		ValidationEnv: env,
+		SkipExecute:   !req.Execute,
+		MaxRetries:    req.MaxRetries,
+		EventSink:     sink,
+	}
+
+	go func() {
+		var state *aiworkflow.State
+		var runErr error
+		if mode == string(aiworkflow.ModeFix) {
+			state, runErr = s.aiWorkflow.RunFix(ctx, req.YAML, req.Issues, opts)
+		} else {
+			state, runErr = s.aiWorkflow.RunGenerate(ctx, strings.TrimSpace(req.Prompt), req.Context, opts)
+		}
+		resultCh <- streamResult{state: state, err: runErr}
+		close(events)
+	}()
+
+	for {
+		select {
+		case evt, ok := <-events:
+			if ok {
+				writeSSE(w, "status", evt)
+				flusher.Flush()
+				continue
+			}
+			events = nil
+		case result := <-resultCh:
+			if result.err != nil {
+				writeSSE(w, "error", map[string]string{"error": result.err.Error()})
+				flusher.Flush()
+				return
+			}
+			if result.state != nil && result.state.ExecutionResult != nil && !result.state.ExecutionSkipped {
+				execResult := result.state.ExecutionResult
+				s.recordValidationAudit(validationAuditEntry{
+					Source:    "ai-workflow-stream",
+					Env:       envName,
+					EnvType:   envType,
+					Status:    execResult.Status,
+					Code:      execResult.Code,
+					Error:     result.state.LastError,
+					YAMLHash:  hashYAML(result.state.YAML),
+					StepCount: countStepsInYAML(result.state.YAML),
+				})
+			}
+			title := ""
+			prompt := ""
+			if mode == string(aiworkflow.ModeGenerate) {
+				title = titleFromMessage(req.Prompt)
+				prompt = req.Prompt
+			} else if strings.TrimSpace(req.DraftID) == "" {
+				title = "AI Fix"
+			}
+			draftID := s.saveAIDraft(req.DraftID, title, prompt, result.state)
+			payload := map[string]any{
+				"yaml":         result.state.YAML,
+				"summary":      result.state.Summary,
+				"issues":       result.state.Issues,
+				"risk_level":   result.state.RiskLevel,
+				"needs_review": result.state.NeedsReview,
+				"history":      result.state.History,
+				"draft_id":     draftID,
+			}
+			writeSSE(w, "result", payload)
+			flusher.Flush()
+			return
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func countStepsInYAML(yamlText string) int {
+	lines := strings.Split(yamlText, "\n")
+	count := 0
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "- name:") {
+			count++
+		}
+	}
+	return count
+}
+
+func writeSSE(w http.ResponseWriter, event string, payload any) {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		data = []byte(`{}`)
+	}
+	if event != "" {
+		_, _ = fmt.Fprintf(w, "event: %s\n", event)
+	}
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+}
+
+func (s *Server) saveAIDraft(id, title, prompt string, state *aiworkflow.State) string {
+	if s.aiWorkflowStore == nil || state == nil {
+		return id
+	}
+	draft := aiworkflowstore.Draft{
+		ID:        id,
+		Title:     title,
+		Prompt:    prompt,
+		YAML:      state.YAML,
+		Summary:   state.Summary,
+		Issues:    state.Issues,
+		RiskLevel: string(state.RiskLevel),
+	}
+	saved, err := s.aiWorkflowStore.Save(draft)
+	if err != nil {
+		return id
+	}
+	return saved.ID
+}
+
+func (s *Server) defaultValidationEnv() *validationenv.ValidationEnv {
+	if s.validationStore == nil {
+		return nil
+	}
+	envs, err := s.validationStore.List()
+	if err != nil || len(envs) == 0 {
+		return nil
+	}
+	var picked string
+	for _, env := range envs {
+		if env.Type == validationenv.EnvTypeContainer {
+			picked = env.Name
+			break
+		}
+	}
+	if picked == "" {
+		picked = envs[0].Name
+	}
+	env, _, err := s.validationStore.Get(picked)
+	if err != nil {
+		return nil
+	}
+	return &env
 }
 
 func (s *Server) buildChatMessages(history []ai.Message, userMsg ai.Message) []ai.Message {

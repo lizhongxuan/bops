@@ -1,13 +1,20 @@
 version: v0.1
 name: test-workflow
-description: test workflo
+description: test workflo123123
 
 inventory:
+  groups:
+    web1:
+      hosts:
+        - 127.0.0.1
   hosts:
     local:
       address: 127.0.0.1
     web:
       address: 127.0.0.1
+
+env_packages:
+  - 11
 
 plan:
   mode: manual-approve
@@ -17,6 +24,8 @@ steps:
   - name: run command
     targets: [local]
     action: cmd.run
+    with:
+      cmd: "ls"
 
   - name: run command5
     targets: [local]
@@ -48,12 +57,10 @@ steps:
     targets: [local]
     action: env.set
     with:
-      env:
-        TOKEN: ""
+      TOKEN: ""
 
   - name: run shell script
     targets: [web]
     action: script.shell
     with:
-      script: |
-        echo "hello from shell"
+      aa: "bb"

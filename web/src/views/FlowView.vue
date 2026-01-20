@@ -6,19 +6,11 @@
         <p>工作流：{{ workflowName }} · 可视化编辑节点配置并同步回 YAML。</p>
       </div>
       <div class="actions">
-        <RouterLink class="btn" :to="`/workflows/${workflowName}`">返回 YAML</RouterLink>
-        <button class="btn" type="button" :disabled="runBusy" @click="planRun">计划</button>
-        <button class="btn primary" type="button" :disabled="runBusy" @click="applyRun">
-          执行
-        </button>
-        <button class="btn ghost" type="button" :disabled="runBusy" @click="stopRun">
-          停止
-        </button>
+        <RouterLink class="btn" :to="`/workflows/${workflowName}`">返回编排</RouterLink>
         <div class="sync">
           <span class="dot" :class="isSynced ? 'ok' : 'warn'"></span>
           {{ isSynced ? "已同步" : "同步中..." }}
         </div>
-        <div v-if="runMessage" class="run-message">{{ runMessage }}</div>
       </div>
     </div>
 

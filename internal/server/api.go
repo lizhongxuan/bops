@@ -83,6 +83,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/ai/chat/sessions/", s.handleAIChatSession)
 	s.mux.HandleFunc("/api/ai/workflow/generate", s.handleAIWorkflowGenerate)
 	s.mux.HandleFunc("/api/ai/workflow/fix", s.handleAIWorkflowFix)
+	s.mux.HandleFunc("/api/ai/workflow/validate", s.handleAIWorkflowValidate)
+	s.mux.HandleFunc("/api/ai/workflow/execute", s.handleAIWorkflowExecute)
+	s.mux.HandleFunc("/api/ai/workflow/summary", s.handleAIWorkflowSummary)
+	s.mux.HandleFunc("/api/ai/workflow/stream", s.handleAIWorkflowStream)
 	s.mux.HandleFunc("/api/runs", s.handleRuns)
 	s.mux.HandleFunc("/api/runs/", s.handleRun)
 

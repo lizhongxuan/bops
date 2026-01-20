@@ -195,9 +195,18 @@ const workflowName = computed(() => {
   return "";
 });
 
-const workflowLink = computed(() =>
-  workflowName.value ? `/workflows/${workflowName.value}/flow` : "/workflows"
-);
+const failedStepName = computed(() => {
+  const failed = steps.value.find((step) => step.status === "failed");
+  return failed?.name || "";
+});
+
+const workflowLink = computed(() => {
+  if (!workflowName.value) return "/workflows";
+  const query = failedStepName.value
+    ? `?step=${encodeURIComponent(failedStepName.value)}`
+    : "";
+  return `/workflows/${workflowName.value}${query}`;
+});
 
 const runStatus = computed(() => run.value?.status || "queued");
 const runMessage = computed(() => run.value?.message || "");

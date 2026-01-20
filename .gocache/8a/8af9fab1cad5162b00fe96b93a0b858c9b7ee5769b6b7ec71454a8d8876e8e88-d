@@ -1,0 +1,10 @@
+# test log
+stat /bin/sh
+open /bin/sh
+stat /bin/sh
+open /bin/sh
+getenv TMPDIR
+stat /var/folders/vn/x78b8m3130zc2p39_465g2b80000gn/T/TestScriptModuleRefMismatch3051392002/001
+open /var/folders/vn/x78b8m3130zc2p39_465g2b80000gn/T/TestScriptModuleRefMismatch3051392002/001/py-script.yaml
+open /var/folders/vn/x78b8m3130zc2p39_465g2b80000gn/T/TestScriptModuleRefMismatch3051392002/001/py-script.yaml
+open /var/folders/vn/x78b8m3130zc2p39_465g2b80000gn/T

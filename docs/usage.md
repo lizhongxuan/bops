@@ -27,6 +27,93 @@
 }
 ```
 
+## AI 工作流助手 (Web)
+
+入口: `http://localhost:5173/`，首页提供“生成 → 校验 → 修复 → 保存”的完整链路。
+
+核心流程:
+- 输入需求，点击“生成方案”获得 YAML + 步骤预览。
+- 可执行“校验 / 沙箱验证”查看错误与输出日志。
+- 风险等级为 `high` 或校验失败时，需要人工确认并填写原因后才能保存。
+- 保存后自动跳转到工作流编排页。
+
+审计日志:
+- 每次沙箱执行会记录到 `data/validation_audit.log` (JSONL)，便于追踪执行环境与结果。
+
+### 示例 prompt
+
+```
+在 web1/web2 上安装 nginx，渲染配置并启动服务
+```
+
+### 生成 YAML 样例
+
+```yaml
+version: v0.1
+name: deploy-nginx
+description: install nginx on web hosts
+
+inventory:
+  groups:
+    web:
+      hosts:
+        - web1
+        - web2
+
+plan:
+  mode: manual-approve
+
+steps:
+  - name: install nginx
+    targets: [web]
+    action: pkg.install
+    with:
+      name: nginx
+
+  - name: render config
+    targets: [web]
+    action: template.render
+    with:
+      src: nginx.conf.j2
+      dest: /etc/nginx/nginx.conf
+
+  - name: start nginx
+    targets: [web]
+    action: service.ensure
+    with:
+      name: nginx
+      state: started
+```
+
+### 错误场景与修复示例
+
+错误示例:
+```yaml
+version: v0.1
+name: bad-example
+steps:
+  - name: start nginx
+    targets: [web]
+    with:
+      name: nginx
+      state: started
+```
+
+校验返回:
+```
+steps[0] action is required
+```
+
+修复后的步骤:
+```yaml
+- name: start nginx
+  targets: [web]
+  action: service.ensure
+  with:
+    name: nginx
+    state: started
+```
+
 ## 内置模块 (actions)
 
 ### template.render

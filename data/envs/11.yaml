@@ -1,3 +1,5 @@
 name: "11"
 description: ""
-env: {}
+env:
+    aa: aa
+    bb: bb

@@ -1,0 +1,11 @@
+# test log
+getenv TMPDIR
+stat /var/folders/vn/x78b8m3130zc2p39_465g2b80000gn/T/TestValidationEnvStorePutGet652194743/001
+open /var/folders/vn/x78b8m3130zc2p39_465g2b80000gn/T/TestValidationEnvStorePutGet652194743/001/docker.yaml
+open /var/folders/vn/x78b8m3130zc2p39_465g2b80000gn/T/TestValidationEnvStorePutGet652194743/001/docker.yaml
+open /var/folders/vn/x78b8m3130zc2p39_465g2b80000gn/T
+getenv TMPDIR
+stat /var/folders/vn/x78b8m3130zc2p39_465g2b80000gn/T/TestValidationEnvStoreValidation1876746031/001
+stat /var/folders/vn/x78b8m3130zc2p39_465g2b80000gn/T/TestValidationEnvStoreValidation1876746031/001
+stat /var/folders/vn/x78b8m3130zc2p39_465g2b80000gn/T/TestValidationEnvStoreValidation1876746031/001
+open /var/folders/vn/x78b8m3130zc2p39_465g2b80000gn/T

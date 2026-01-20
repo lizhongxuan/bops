@@ -1,0 +1,5 @@
+./inventory.go
+./loader.go
+./model.go
+./render.go
+./validate.go

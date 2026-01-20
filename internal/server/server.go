@@ -10,6 +10,8 @@ import (
 
 	"bops/internal/ai"
 	"bops/internal/aistore"
+	"bops/internal/aiworkflow"
+	"bops/internal/aiworkflowstore"
 	"bops/internal/config"
 	"bops/internal/engine"
 	"bops/internal/envstore"
@@ -32,11 +34,14 @@ type Server struct {
 	aiStore         *aistore.Store
 	aiClient        ai.Client
 	aiPrompt        string
+	aiWorkflow      *aiworkflow.Pipeline
+	aiWorkflowStore *aiworkflowstore.Store
 	validationStore *validationenv.Store
 	scriptStore     *scriptstore.Store
 	engine          *engine.Engine
 	runs            *runmanager.Manager
 	bus             *eventbus.Bus
+	auditLogPath    string
 }
 
 func New(cfg config.Config) *Server {
@@ -50,6 +55,15 @@ func New(cfg config.Config) *Server {
 	})
 	prompt := ai.LoadPrompt(filepath.Join("docs", "prompt-workflow.md"))
 	scriptStore := scriptstore.New(filepath.Join(cfg.DataDir, "scripts"))
+	aiWorkflowStore := aiworkflowstore.New(filepath.Join(cfg.DataDir, "ai_workflows"))
+	var aiWorkflow *aiworkflow.Pipeline
+	if aiClient != nil {
+		aiWorkflow, _ = aiworkflow.New(aiworkflow.Config{
+			Client:       aiClient,
+			SystemPrompt: prompt,
+			MaxRetries:   2,
+		})
+	}
 	srv := &Server{
 		Addr:            cfg.ServerListen,
 		StaticDir:       cfg.StaticDir,
@@ -60,11 +74,14 @@ func New(cfg config.Config) *Server {
 		aiStore:         aistore.New(filepath.Join(cfg.DataDir, "ai_sessions")),
 		aiClient:        aiClient,
 		aiPrompt:        prompt,
+		aiWorkflow:      aiWorkflow,
+		aiWorkflowStore: aiWorkflowStore,
 		validationStore: validationenv.NewStore(filepath.Join(cfg.DataDir, "validation_envs")),
 		scriptStore:     scriptStore,
 		engine:          engine.New(defaultRegistry(scriptStore)),
 		runs:            runmanager.NewWithBus(state.NewFileStore(cfg.StatePath), bus),
 		bus:             bus,
+		auditLogPath:    filepath.Join(cfg.DataDir, "validation_audit.log"),
 	}
 	srv.routes()
 	return srv
