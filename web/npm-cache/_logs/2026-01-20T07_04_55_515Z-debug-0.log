@@ -1,0 +1,36 @@
+0 verbose cli /opt/homebrew/Cellar/node/23.10.0_1/bin/node /opt/homebrew/bin/npm
+1 info using npm@10.9.2
+2 info using node@v23.10.0
+3 silly config load:file:/opt/homebrew/lib/node_modules/npm/npmrc
+4 silly config load:file:/Users/zhongxuan/Desktop/aiops/bops/web/web/.npmrc
+5 silly config load:file:/Users/zhongxuan/.npmrc
+6 silly config load:file:/Users/zhongxuan/Desktop/aiops/bops/web/web/etc/npmrc
+7 verbose title npm run build
+8 verbose argv "run" "--prefix" "web" "build"
+9 verbose logfile logs-max:10 dir:/Users/zhongxuan/Desktop/aiops/bops/web/npm-cache/_logs/2026-01-20T07_04_55_515Z-
+10 verbose logfile /Users/zhongxuan/Desktop/aiops/bops/web/npm-cache/_logs/2026-01-20T07_04_55_515Z-debug-0.log
+11 silly logfile start cleaning logs, removing 1 files
+12 verbose stack Error: Could not read package.json: Error: ENOENT: no such file or directory, open '/Users/zhongxuan/Desktop/aiops/bops/web/web/package.json'
+12 verbose stack     at async open (node:internal/fs/promises:634:25)
+12 verbose stack     at async readFile (node:internal/fs/promises:1238:14)
+12 verbose stack     at async read (/opt/homebrew/lib/node_modules/npm/node_modules/@npmcli/package-json/lib/read-package.js:9:18)
+12 verbose stack     at async PackageJson.load (/opt/homebrew/lib/node_modules/npm/node_modules/@npmcli/package-json/lib/index.js:131:31)
+12 verbose stack     at async PackageJson.normalize (/opt/homebrew/lib/node_modules/npm/node_modules/@npmcli/package-json/lib/index.js:117:5)
+12 verbose stack     at async #run (/opt/homebrew/lib/node_modules/npm/lib/commands/run-script.js:86:13)
+12 verbose stack     at async RunScript.exec (/opt/homebrew/lib/node_modules/npm/lib/commands/run-script.js:40:7)
+12 verbose stack     at async Npm.exec (/opt/homebrew/lib/node_modules/npm/lib/npm.js:207:9)
+12 verbose stack     at async module.exports (/opt/homebrew/lib/node_modules/npm/lib/cli/entry.js:74:5)
+13 error code ENOENT
+14 error syscall open
+15 error path /Users/zhongxuan/Desktop/aiops/bops/web/web/package.json
+16 error errno -2
+17 error enoent Could not read package.json: Error: ENOENT: no such file or directory, open '/Users/zhongxuan/Desktop/aiops/bops/web/web/package.json'
+18 error enoent This is related to npm not being able to find a file.
+18 error enoent
+19 verbose cwd /Users/zhongxuan/Desktop/aiops/bops/web
+20 verbose os Darwin 23.5.0
+21 verbose node v23.10.0
+22 verbose npm  v10.9.2
+23 verbose exit -2
+24 verbose code -2
+25 error A complete log of this run can be found in: /Users/zhongxuan/Desktop/aiops/bops/web/npm-cache/_logs/2026-01-20T07_04_55_515Z-debug-0.log

@@ -1,102 +1,219 @@
-# 首页 - AI 工作流助手方案 (Eino)
+# AI 工作流助手 - 聊天优先首页设计 (Manus 风格)
 
-## 目标与定位
-- 让用户在首页用一句话生成可执行的 YAML 工作流，并可视化预览。
-- 采用 “生成 -> 验证 -> 修复” 闭环，默认人工确认后执行。
-- 对齐现有执行引擎、容器验证、模板市场与 MCP 原子能力。
+## 1. 目标
 
-## 设计原则
-- 人机协同：AI 负责写与诊，人负责审与改。
-- 可验证：生成结果必须可校验、可在沙箱复现。
-- 可解释：每次修复给出 Diff 与原因。
-- 可扩展：用 Eino Graph 编排节点，便于替换模型与能力。
+- 以聊天为主线，持续追问与确认需求细节。
+- 配置尽量可视化，减少用户手写 YAML 的负担。
+- 快速闭环: 生成 -> 校验 -> 修复 -> 审核 -> 保存。
+- 可追溯: 草稿历史、风险提示、验证输出清晰可见。
 
-## 核心流程 (Self-Correction Loop)
-1. 用户输入需求 + 目标环境 + 约束。
-2. Generator 生成初版 YAML。
-3. Validator 语法/规则校验 + 风险检测。
-4. Executor 在沙箱中验证执行，采集日志。
-5. 失败 -> Fixer 根据错误日志修复，进入下一轮。
-6. 达到最大重试或通过 -> Human Gate 审批。
-7. 保存为工作流，进入编排页继续编辑。
+## 2. 非目标
 
-## Eino Graph 设计
-### 节点
-- InputNormalizer: 标准化用户需求与上下文。
-- Generator: 生成 YAML。
-- Validator: 语法 + 规则校验 (缺字段/格式/不支持动作)。
-- SafetyCheck: 高危命令识别与降级建议。
-- Executor: 沙箱执行、收集日志与失败步骤。
-- Fixer: 根据日志修复 YAML，记录修复 History。
-- Summarizer: 生成可读摘要与提示。
-- HumanGate: 进入人工确认流程。
+- 不替代 Workflow Studio 的高级编辑能力。
+- 不支持复杂多分支流程(先聚焦线性步骤)。
 
-### 逻辑流转
-- Start -> InputNormalizer -> Generator -> Validator -> SafetyCheck -> Executor
-- Executor 成功 -> Summarizer -> HumanGate -> End
-- Executor 失败 -> Fixer -> Validator -> SafetyCheck -> Executor
-- Fixer 超过上限或风险过高 -> HumanGate (提示人工处理)
+## 3. 体验方向
 
-### 状态结构 (简化)
-```go
-type AIState struct {
-  Prompt        string
-  Context       map[string]any
-  YAML          string
-  Issues        []string
-  RiskLevel     string
-  RetryCount    int
-  MaxRetries    int
-  Logs          string
-  FailedStep    string
-  History       []string
-  Summary       string
-  IsSuccess     bool
+采用 Manus 式双栏结构:
+
+- 左侧: 聊天时间线(需求、澄清、确认、建议)。
+- 右侧: 工作流工作区(可视化步骤 + YAML 预览可切换)。
+
+AI 负责引导收集信息，用户以可视化控件补充细节，AI 持续更新工作流草稿。
+
+## 4. 页面
+
+- 左侧: Chat Timeline + 输入框
+- 右侧: Workflow Workspace (tabs)
+  - 可视化构建(默认),每个步骤有个详情按钮,可以编辑内容
+  - YAML 预览(可选)
+  - 校验 / 执行日志
+  
+
+## 5. 核心交互流程
+
+1) 用户在聊天中描述需求。
+2) AI 返回需求总结卡片与缺失信息列表。
+3) 用户在聊天中补充或用右侧控件填写。
+4) AI 生成草稿并同步更新可视化步骤。
+5) 用户调整步骤、目标主机、策略等。
+6) 校验或沙箱执行，失败则 AI 修复。
+7) 风险高或校验失败时要求人工确认与原因。
+8) 保存为工作流，跳转编排页。
+
+## 6. 聊天体验设计
+
+### 消息类型
+
+- 用户消息
+- AI 回复
+- 需求总结卡片
+- 澄清问题
+- 动作建议(生成/校验/修复/执行)
+- 风险提示
+
+### AI 对话策略
+
+- 在保存前必须确认:
+  - 目标主机/分组
+  - 动作类型与关键参数
+  - 验证环境
+- 提供默认值并标注“可修改”。
+
+### 推荐澄清问题
+
+- 目标是哪些主机/分组? 
+> 答: 都支持,有个选择框可以选.
+
+- 需要的动作类型是什么?
+> 答: 请你给出建议
+
+- 是否需要沙箱验证? 使用哪个环境?
+> 答: 可选,若选择了验证环境,就支持AI/手段验证. 
+
+- 执行策略是 manual-approve 还是 auto?
+> 答: manual-approve
+
+## 7. 可视化配置 (降低负担)
+
+### A. 需求总结卡片
+
+- 从聊天中解析:
+  - 标题、描述
+  - 目标(主机/分组)
+  - 动作清单
+  - 约束(计划策略、重试、变量包)
+
+### B. 目标选择器
+
+- 标签化选择
+- 支持从 inventory 读取建议
+- 支持自由输入
+
+### C. 步骤构建器
+
+- 步骤列表卡片，显示状态: Draft / Validated / Failed / Risky
+- 步骤详情表单(随 action 动态切换):
+  - cmd.run: cmd, dir, env
+  - pkg.install: name(s)
+  - template.render: src, dest, vars
+  - service.ensure: name, state
+  - script.shell/python: script 或 script_ref
+
+### D. 计划与执行参数
+
+- Plan Mode: manual-approve / auto
+- Validation Env: 下拉
+- Max Retries
+- Env Packages: 多选
+
+### E. YAML 预览
+
+- 可切换
+- 点击步骤卡片定位 YAML 对应片段
+
+## 8. 工作流迭代闭环
+
+状态:
+
+- Draft: AI 生成草稿
+- Validated: 校验通过
+- NeedsFix: 校验/执行失败
+- Risky: 高风险命令
+- Ready: 已确认可保存
+
+动作:
+
+- Generate: 生成草稿
+- Validate: 校验
+- Execute: 沙箱执行
+- Fix: AI 修复
+- Save: 保存
+
+## 9. 流式反馈
+
+- SSE 显示节点进度:
+  normalize -> generator -> validator -> safety -> executor -> fixer -> summarizer
+- 左侧聊天与右侧进度面板同步更新
+
+## 10. 前端数据模型
+
+```
+state = {
+  chat: {
+    messages: [],
+    pendingQuestions: [],
+    summary: {}
+  },
+  draft: {
+    yaml: "",
+    steps: [],
+    history: [],
+    issues: [],
+    riskLevel: "",
+    needsReview: false,
+    draftId: ""
+  },
+  config: {
+    targets: [],
+    planMode: "manual-approve",
+    envPackages: [],
+    validationEnv: "",
+    maxRetries: 2
+  }
 }
 ```
 
-## Prompt 与结构化输出
-- 生成阶段输出 YAML，约束字段完整 (version/name/plan/steps/targets/action/with)。
-- 修复阶段输入：旧 YAML + 错误日志 + Issues。
-- 输出需结构化解析，必要时先生成 JSON 再渲染 YAML。
-- 默认模型：DeepSeek (可配置多模型切换)。
+## 11. API 对接
 
-## 首页信息架构
-1. Hero 区：价值主张 + 信任提示 (可视化/可测试/可移植)。
-2. 需求输入区：主输入框 + 示例模板 + 高级约束。
-3. 结果区 (双栏)：
-   - 左：步骤卡片 (targets/action/with 摘要)。
-   - 右：YAML 预览 + Diff 历史。
-4. 验证与修复区：状态、日志、失败步骤、修复次数。
-5. 行动区：保存为工作流 / 继续编辑 / 下载 / 复制。
+- POST `/api/ai/workflow/stream` (生成/修复 SSE)
+- POST `/api/ai/workflow/summary`
+- POST `/api/ai/workflow/execute`
+- POST `/api/workflows/_draft/validate`
+- PUT `/api/workflows/{name}`
+- GET `/api/validation-envs`
+- GET `/api/envs`
 
-## 交互细节
-- 结果区支持步骤与 YAML 双向定位。
-- 修复历史以时间轴展示，每次可回滚。
-- 高风险提示需二次确认或输入原因说明。
-- 运行状态通过 SSE 推送：生成中/验证中/修复中/完成。
+映射建议:
 
-## 接口建议 (与现有端点对齐)
-现有：
-- POST /api/ai/workflow/generate
-- POST /api/ai/workflow/fix
+- Generate: 带视觉配置 context 的 stream
+- Validate: workflow validate
+- Execute: sandbox run
+- Fix: stream with yaml + issues
 
-建议补充：
-- POST /api/ai/workflow/validate
-- POST /api/ai/workflow/execute
-- POST /api/ai/workflow/summary
+## 12. 错误与风险处理
 
-## 安全与风险控制
-- 沙箱执行：隔离容器，执行完成即销毁。
-- 高危命令检测 (rm/shutdown/mkfs/iptables)。
-- 黑名单 + 白名单组合策略，保留人工确认出口。
+- 校验失败:
+  - 高亮步骤卡片
+  - 错误绑定到具体步骤
+- 风险高:
+  - 风险提示 Banner
+  - 保存前必须人工确认 + 原因
 
-## 里程碑
-- M1: 需求输入 + 生成 YAML + 步骤预览 + 保存。
-- M2: 校验 + Diff + 修复历史展示。
-- M3: 沙箱执行 + 自动修复回路 + SSE 状态流。
+## 13. 草稿历史与 Diff
 
-## 待确认问题
-- 最大修复次数上限与超时策略。
-- 高危规则清单与白名单机制。
-- 多模型切换策略与成本控制。
+- 每次生成/修复保存快照
+- 显示 diff 概要
+- 支持一键回滚
+
+## 14. 组件拆分建议
+
+- HomeView (双栏布局)
+- ChatTimeline.vue
+- RequirementSummaryCard.vue
+- StepBuilder.vue
+- StepDetailForm.vue
+- ValidationPanel.vue
+- YAMLPreview.vue
+- RiskConfirmModal.vue
+
+## 15. 待确认问题
+
+- 聊天会话是否需要持久化?
+> 需要
+
+- 是否默认在生成后自动校验?
+> 是校验什么?
+
+- 没有验证环境时的默认策略?
+> 你有什么好建议?

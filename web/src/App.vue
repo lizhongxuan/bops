@@ -16,7 +16,16 @@ const isFullHeightPage = computed(() =>
 );
 
 const hideTopbarTitle = computed(() =>
-  ["workflows", "runs", "workflow-runs", "run-console", "envs", "validation-envs", "scripts"].includes(routeName.value)
+  [
+    "home",
+    "workflows",
+    "runs",
+    "workflow-runs",
+    "run-console",
+    "envs",
+    "validation-envs",
+    "scripts"
+  ].includes(routeName.value)
 );
 
 const showTopbarTitle = computed(() => !hideTopbarTitle.value);

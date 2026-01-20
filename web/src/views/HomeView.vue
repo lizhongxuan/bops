@@ -1,98 +1,343 @@
 <template>
   <section class="home-ai">
-    <div class="hero">
-      <div class="hero-copy">
-        <div class="eyebrow">AI Workflow Assistant</div>
-        <h1>从一句需求到可执行 YAML，几分钟内完成验证与修复。</h1>
-        <p>
-          生成 → 校验 → 修复 → 审核，一条链路把运维流程变成可追溯的工作流。
-        </p>
-        <div class="hero-actions">
-          <button class="btn primary" type="button" :disabled="busy" @click="startStream">
-            生成方案
+    <div class="main-grid">
+      <section class="panel chat-panel">
+        <div class="panel-head chat-head">
+          <div>
+            <h2>工作流AI助手</h2>
+            <p>AI 负责拆解需求并生成草稿，你只需确认关键细节。</p>
+          </div>
+          <div class="status-tag" :class="streamError ? 'error' : busy ? 'busy' : 'idle'">
+            {{ streamError ? '异常' : busy ? '生成中' : '就绪' }}
+          </div>
+        </div>
+
+        <div class="draft-stats">
+          <div class="draft-stat">
+            <span>草稿</span>
+            <strong>{{ draftStatus }}</strong>
+          </div>
+          <div class="draft-stat">
+            <span>风险</span>
+            <strong :class="`risk-${summary.riskLevel || 'low'}`">{{ summary.riskLevel || 'low' }}</strong>
+          </div>
+          <div class="draft-stat">
+            <span>步骤</span>
+            <strong>{{ steps.length }}</strong>
+          </div>
+          <div class="draft-stat">
+            <span>确认</span>
+            <strong>{{ confirmStatus }}</strong>
+          </div>
+        </div>
+
+        <div class="chat-body">
+          <ul class="timeline">
+            <li v-for="entry in timelineEntries" :key="entry.id" class="timeline-item">
+              <div class="timeline-header">
+                <span class="timeline-badge" :class="entry.type">{{ entry.label }}</span>
+                <small v-if="entry.extra">{{ entry.extra }}</small>
+              </div>
+              <p>{{ entry.body }}</p>
+            </li>
+          </ul>
+        </div>
+
+        <div class="composer">
+          <div class="chat-toolbar">
+            <button class="btn ghost btn-sm" type="button" @click="showConfigModal = true">
+              选择目标主机/分组
+            </button>
+            <button
+              class="btn primary btn-sm"
+              type="button"
+              :disabled="busy || !prompt.trim()"
+              @click="startStream"
+            >
+              生成草稿
+            </button>
+            <button class="btn btn-sm" type="button" :disabled="busy || !yaml.trim()" @click="validateDraft">
+              校验
+            </button>
+            <button class="btn btn-sm" type="button" :disabled="executeBusy || !yaml.trim()" @click="runExecution">
+              沙箱验证
+            </button>
+          </div>
+          <textarea
+            v-model="prompt"
+            placeholder="描述需求，例如：在 web1/web2 上安装 nginx，渲染配置并启动服务"
+            rows="4"
+          ></textarea>
+          <div v-if="showExamples" class="example-row">
+            <button
+              v-for="item in examples"
+              :key="item"
+              class="chip"
+              type="button"
+              @click="applyExample(item)"
+            >
+              {{ item }}
+            </button>
+          </div>
+          <div class="composer-footer">
+            <button
+              class="btn primary btn-sm"
+              type="button"
+              :disabled="busy || !prompt.trim()"
+              @click="startStream"
+            >
+              发送
+            </button>
+            <button class="btn ghost btn-sm" type="button" @click="toggleExamples">示例</button>
+            <button class="btn ghost btn-sm" type="button" :disabled="busy" @click="clearPrompt">
+              清空
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel workspace-panel">
+        <div class="panel-head workspace-head">
+          <div class="workspace-title">
+            <h2>{{ draftTitle }}</h2>
+            <p>通过聊天不断完善细节</p>
+            <div class="workspace-tags">
+              <span class="chip subtle">{{ planMode }}</span>
+              <span class="chip" :class="`risk-${summary.riskLevel || 'low'}`">
+                {{ summary.riskLevel || 'low' }}
+              </span>
+            </div>
+          </div>
+          <div class="panel-actions">
+            <button class="btn ghost btn-sm" type="button" @click="showSummaryModal = true">
+              需求摘要
+            </button>
+            <button
+              class="btn ghost btn-sm"
+              type="button"
+              :disabled="!historyTimeline.length"
+              @click="showHistoryModal = true"
+            >
+              草稿历史
+            </button>
+            <div class="status-tag" :class="validation.ok ? 'ok' : 'warn'">
+              {{ validation.ok ? '校验通过' : '待修复' }}
+            </div>
+          </div>
+        </div>
+
+        <div class="workspace-tabs">
+          <button
+            type="button"
+            class="tab"
+            :class="{ active: workspaceTab === 'visual' }"
+            @click="workspaceTab = 'visual'"
+          >
+            可视化
           </button>
-          <button class="btn ghost" type="button" @click="applyExample(examples[0])">
-            插入示例
+          <button
+            type="button"
+            class="tab"
+            :class="{ active: workspaceTab === 'yaml' }"
+            @click="workspaceTab = 'yaml'"
+          >
+            YAML
+          </button>
+          <button
+            type="button"
+            class="tab"
+            :class="{ active: workspaceTab === 'validate' }"
+            @click="workspaceTab = 'validate'"
+          >
+            校验与执行
           </button>
         </div>
-      </div>
-      <div class="hero-card">
-        <div class="hero-stat">
-          <span class="label">当前草稿</span>
-          <span class="value">{{ draftId || "未保存" }}</span>
+
+        <div v-if="workspaceTab === 'visual'" class="tab-panel">
+          <div class="steps-section">
+            <div class="steps-head">
+              <h3>步骤构建器</h3>
+              <div class="steps-head-actions">
+                <span class="step-count">{{ steps.length }} 步</span>
+                <button class="btn secondary btn-sm" type="button" @click="appendStep">
+                  新增步骤
+                </button>
+              </div>
+            </div>
+            <div v-if="steps.length" class="steps-list">
+              <button
+                class="step-card"
+                v-for="(step, index) in steps"
+                :key="step.name || `step-${index}`"
+                :class="{ active: selectedStep === step.name, error: stepIssueIndexes.includes(index) }"
+                type="button"
+                @click="focusStep(step)"
+              >
+                <div class="step-name">{{ step.name }}</div>
+                <div class="step-meta">{{ step.action || '未指定动作' }}</div>
+                <div class="step-targets" v-if="step.targets">目标: {{ step.targets }}</div>
+              </button>
+            </div>
+            <div v-else class="empty">尚未解析到步骤，生成草稿获取可视化内容。</div>
+          </div>
         </div>
-        <div class="hero-stat">
-          <span class="label">风险等级</span>
-          <span class="value" :class="`risk-${summary.riskLevel}`">
-            {{ summary.riskLevel || "-" }}
+
+        <div v-else-if="workspaceTab === 'yaml'" class="tab-panel">
+          <textarea ref="yamlRef" v-model="yaml" spellcheck="false" class="code" rows="20"></textarea>
+          <div class="yaml-actions">
+            <button class="btn" type="button" :disabled="validationBusy || !yaml.trim()" @click="validateDraft">
+              校验
+            </button>
+            <button class="btn" type="button" :disabled="executeBusy || !yaml.trim()" @click="runExecution">
+              沙箱验证
+            </button>
+            <button
+              class="btn primary"
+              type="button"
+              :disabled="busy || !yaml.trim() || requiresConfirm"
+              @click="saveWorkflow"
+            >
+              保存为工作流
+            </button>
+          </div>
+        </div>
+
+        <div v-else class="tab-panel validation-panel">
+          <div class="validation-actions">
+            <button class="btn" type="button" :disabled="validationBusy || !yaml.trim()" @click="validateDraft">
+              校验
+            </button>
+            <button class="btn" type="button" :disabled="executeBusy || !yaml.trim()" @click="runExecution">
+              沙箱验证
+            </button>
+          </div>
+          <div class="alert" :class="validation.ok ? 'ok' : 'warn'">
+            {{ validation.ok ? '校验通过' : '校验未通过' }}
+          </div>
+          <ul class="issues" v-if="validation.issues.length">
+            <li v-for="issue in validation.issues" :key="issue">{{ issue }}</li>
+          </ul>
+
+          <div class="human-gate" v-if="summary.needsReview">
+            <div class="gate-copy">检测到风险或校验失败，需要人工确认后才能保存。</div>
+            <div v-if="requiresReason" class="gate-reason">
+              <label>确认原因</label>
+              <input v-model="confirmReason" type="text" placeholder="填写原因" />
+            </div>
+            <div class="gate-actions">
+              <button
+                class="btn ghost"
+                type="button"
+                :disabled="requiresReason && !confirmReason.trim() && !humanConfirmed"
+                @click="humanConfirmed = !humanConfirmed"
+              >
+                {{ humanConfirmed ? '已确认' : '人工确认' }}
+              </button>
+            </div>
+          </div>
+
+          <div class="progress-list compact">
+            <div v-if="progressEvents.length === 0" class="empty">等待生成…</div>
+            <div
+              class="progress-item"
+              v-else
+              v-for="(evt, index) in progressEvents"
+              :key="`${evt.node}-${index}`"
+            >
+              <div class="node">{{ formatNode(evt.node) }}</div>
+              <div class="status" :class="evt.status">{{ evt.status }}</div>
+              <div class="message" v-if="evt.message">{{ evt.message }}</div>
+            </div>
+          </div>
+
+          <div v-if="executeResult" class="execution-result" :class="executeResult.status">
+            <div class="result-title">
+              执行结果: {{ executeResult.status }}
+              <span v-if="executeResult.code">(code {{ executeResult.code }})</span>
+            </div>
+            <div v-if="executeResult.error" class="result-error">{{ executeResult.error }}</div>
+            <div class="result-io">
+              <div v-if="executeResult.stdout" class="result-block">
+                <div class="result-label">stdout</div>
+                <pre>{{ executeResult.stdout }}</pre>
+              </div>
+              <div v-if="executeResult.stderr" class="result-block">
+                <div class="result-label">stderr</div>
+                <pre>{{ executeResult.stderr }}</pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+    <div v-if="showSummaryModal" class="modal-backdrop" @click.self="showSummaryModal = false">
+      <div class="summary-modal">
+        <div class="modal-head">
+          <h3>需求摘要</h3>
+          <button class="modal-close" type="button" @click="showSummaryModal = false">&#10005;</button>
+        </div>
+        <p class="modal-summary">{{ summary.summary || 'AI 还在构建草稿...' }}</p>
+        <div class="modal-grid">
+          <div v-if="environmentNote" class="modal-row">
+            <span>目标环境</span>
+            <strong>{{ environmentNote }}</strong>
+          </div>
+          <div v-if="targetHint" class="modal-row">
+            <span>目标主机/分组</span>
+            <strong>{{ targetHint }}</strong>
+          </div>
+          <div class="modal-row">
+            <span>执行策略</span>
+            <strong>{{ planMode }}</strong>
+          </div>
+          <div class="modal-row">
+            <span>验证环境</span>
+            <strong>{{ selectedValidationEnv || '默认' }}</strong>
+          </div>
+          <div class="modal-row">
+            <span>重试次数</span>
+            <strong>{{ maxRetries }}</strong>
+          </div>
+        </div>
+        <div v-if="summary.issues.length" class="modal-issues">
+          <span class="chip secondary" v-for="issue in summary.issues" :key="issue">
+            {{ issue }}
           </span>
         </div>
-        <div class="hero-stat">
-          <span class="label">步骤数量</span>
-          <span class="value">{{ summary.steps || 0 }}</span>
-        </div>
-        <div class="hero-stat">
-          <span class="label">待审核</span>
-          <span class="value">{{ summary.needsReview ? "是" : "否" }}</span>
-        </div>
+        <button class="btn primary" type="button" @click="showSummaryModal = false">知道了</button>
       </div>
     </div>
-
-    <div class="composer-grid">
-      <div class="panel composer">
-        <div class="panel-head">
-          <div>
-            <h2>需求输入</h2>
-            <p>描述目标、主机与步骤，AI 会生成 YAML 与步骤预览。</p>
-          </div>
-          <div class="status-tag" :class="busy ? 'busy' : 'idle'">
-            {{ busy ? "生成中" : "就绪" }}
-          </div>
+    <div v-if="showConfigModal" class="modal-backdrop" @click.self="showConfigModal = false">
+      <div class="config-modal">
+        <div class="modal-head">
+          <h3>目标与执行参数</h3>
+          <button class="modal-close" type="button" @click="showConfigModal = false">&#10005;</button>
         </div>
-
-        <textarea
-          v-model="prompt"
-          placeholder="例如：在 web1/web2 上安装 nginx，渲染配置并启动服务"
-          rows="6"
-        ></textarea>
-
-        <div class="example-row">
-          <button
-            v-for="item in examples"
-            :key="item"
-            class="chip"
-            type="button"
-            @click="applyExample(item)"
-          >
-            {{ item }}
-          </button>
-        </div>
-
-        <div class="constraints">
-          <div class="field">
-            <label>目标环境</label>
-            <input v-model="environmentNote" type="text" placeholder="例如 Ubuntu 22.04 / macOS M1" />
-          </div>
-          <div class="field">
+        <div class="modal-grid form-grid">
+          <div class="form-field">
             <label>目标主机/分组</label>
             <input v-model="targetHint" type="text" placeholder="例如 web, db" />
           </div>
-          <div class="field">
+          <div class="form-field">
+            <label>目标环境</label>
+            <input v-model="environmentNote" type="text" placeholder="例如 Ubuntu 22.04 / macOS M1" />
+          </div>
+          <div class="form-field">
             <label>执行策略</label>
             <select v-model="planMode">
               <option value="manual-approve">manual-approve</option>
               <option value="auto">auto</option>
             </select>
           </div>
-          <div class="field">
+          <div class="form-field">
             <label>环境变量包</label>
             <input v-model="envPackages" type="text" placeholder="prod-env, staging" />
           </div>
-          <div class="field">
+          <div class="form-field">
             <label>最大修复次数</label>
             <input v-model.number="maxRetries" type="number" min="0" max="5" />
           </div>
-          <div class="field">
+          <div class="form-field">
             <label>验证环境</label>
             <select v-model="selectedValidationEnv">
               <option value="">默认</option>
@@ -101,197 +346,45 @@
               </option>
             </select>
           </div>
-          <div class="field toggle">
-            <label>自动执行验证</label>
-            <button
-              class="toggle-btn"
-              type="button"
-              :class="executeEnabled ? 'on' : 'off'"
-              @click="executeEnabled = !executeEnabled"
-            >
-              {{ executeEnabled ? "启用" : "关闭" }}
-            </button>
-          </div>
         </div>
-
-        <div class="composer-actions">
-          <button class="btn primary" type="button" :disabled="busy" @click="startStream">
-            生成方案
-          </button>
-          <button class="btn" type="button" :disabled="busy || !yaml.trim()" @click="refreshSummary">
-            刷新概览
-          </button>
-          <button class="btn ghost" type="button" :disabled="busy || !yaml.trim()" @click="validateDraft">
-            校验
+        <div class="toggle-row">
+          <span>自动执行验证</span>
+          <button
+            class="toggle-btn"
+            type="button"
+            :class="executeEnabled ? 'on' : 'off'"
+            @click="executeEnabled = !executeEnabled"
+          >
+            {{ executeEnabled ? '启用' : '关闭' }}
           </button>
         </div>
-      </div>
-
-      <div class="panel progress">
-        <div class="panel-head">
-          <div>
-            <h2>运行进度</h2>
-            <p>流式展示节点状态与修复过程。</p>
-          </div>
-          <div class="status-tag" :class="streamError ? 'error' : 'idle'">
-            {{ streamError ? "异常" : "监控中" }}
-          </div>
-        </div>
-
-        <div v-if="streamError" class="alert error">{{ streamError }}</div>
-
-        <div class="progress-list">
-          <div v-if="progressEvents.length === 0" class="empty">等待生成…</div>
-          <div v-else class="progress-item" v-for="(evt, index) in progressEvents" :key="index">
-            <div class="node">{{ formatNode(evt.node) }}</div>
-            <div class="status" :class="evt.status">{{ evt.status }}</div>
-            <div class="message" v-if="evt.message">{{ evt.message }}</div>
-          </div>
+        <div class="modal-actions">
+          <button class="btn primary btn-sm" type="button" @click="showConfigModal = false">完成</button>
         </div>
       </div>
     </div>
-
-    <div class="result-grid">
-      <div class="panel steps">
-        <div class="panel-head">
-          <div>
-            <h2>步骤预览</h2>
-            <p>可视化查看目标与动作。</p>
-          </div>
-          <div class="status-tag" :class="summary.needsReview ? 'warn' : 'ok'">
-            {{ summary.needsReview ? "待审核" : "已就绪" }}
-          </div>
+    <div v-if="showHistoryModal" class="modal-backdrop" @click.self="showHistoryModal = false">
+      <div class="history-modal">
+        <div class="modal-head">
+          <h3>草稿历史</h3>
+          <button class="modal-close" type="button" @click="showHistoryModal = false">&#10005;</button>
         </div>
-
-        <div v-if="steps.length === 0" class="empty">未解析到步骤</div>
-        <div
-          class="step-card"
-          v-for="(step, index) in steps"
-          :key="step.name"
-          :class="{ active: selectedStep === step.name, error: stepIssueIndexes.includes(index) }"
-          role="button"
-          tabindex="0"
-          @click="focusStep(step)"
-          @keydown.enter.prevent="focusStep(step)"
-          @keydown.space.prevent="focusStep(step)"
-        >
-          <div class="step-name">{{ step.name }}</div>
-          <div class="step-meta">{{ step.action || "未指定动作" }}</div>
-          <div class="step-targets" v-if="step.targets">目标: {{ step.targets }}</div>
-        </div>
-
-        <div class="history" v-if="historyTimeline.length">
-          <h3>修复时间轴</h3>
-          <div class="history-list">
-            <button
-              class="history-item"
-              v-for="item in historyTimeline"
-              :key="item.index"
-              type="button"
-              @click="restoreHistory(item.index)"
-            >
-              <div>
-                <div class="history-title">{{ item.label }}</div>
-                <div class="history-diff">{{ item.diff }}</div>
-              </div>
-              <span class="history-restore">恢复</span>
-            </button>
-          </div>
-        </div>
-      </div>
-
-      <div class="panel yaml">
-        <div class="panel-head">
-          <div>
-            <h2>YAML 工作流</h2>
-            <p>生成结果可直接保存或继续手动编辑。</p>
-          </div>
-          <div class="status-tag" :class="validation.ok ? 'ok' : 'warn'">
-            {{ validation.ok ? "校验通过" : "待修复" }}
-          </div>
-        </div>
-
-        <textarea ref="yamlRef" v-model="yaml" spellcheck="false" class="code" rows="18"></textarea>
-
-        <div class="yaml-actions">
-          <button class="btn" type="button" :disabled="validationBusy || !yaml.trim()" @click="validateDraft">
-            校验
-          </button>
+        <div v-if="historyTimeline.length" class="history-list">
           <button
-            class="btn"
+            class="history-item"
+            v-for="item in historyTimeline"
+            :key="item.index"
             type="button"
-            :disabled="executeBusy || !yaml.trim()"
-            @click="runExecution"
+            @click="restoreHistory(item.index)"
           >
-            沙箱验证
-          </button>
-          <button
-            class="btn primary"
-            type="button"
-            :disabled="busy || !yaml.trim() || requiresConfirm"
-            @click="saveWorkflow"
-          >
-            保存为工作流
+            <div>
+              <div class="history-title">{{ item.label }}</div>
+              <div class="history-diff">{{ item.diff }}</div>
+            </div>
+            <span class="history-restore">恢复</span>
           </button>
         </div>
-
-        <div class="alert" :class="validation.ok ? 'ok' : 'warn'">
-          {{ validation.ok ? "校验通过" : "校验未通过" }}
-        </div>
-        <ul class="issues" v-if="validation.issues.length">
-          <li v-for="issue in validation.issues" :key="issue">{{ issue }}</li>
-        </ul>
-
-        <div class="summary">
-          <div class="summary-item">
-            <span>概览</span>
-            <strong>{{ summary.summary || "-" }}</strong>
-          </div>
-          <div class="summary-item">
-            <span>风险</span>
-            <strong :class="`risk-${summary.riskLevel}`">{{ summary.riskLevel || "-" }}</strong>
-          </div>
-          <div class="summary-item" v-if="summary.riskNotes.length">
-            <span>提示</span>
-            <strong>{{ summary.riskNotes.join(" · ") }}</strong>
-          </div>
-        </div>
-
-        <div v-if="summary.needsReview" class="human-gate">
-          <div class="gate-copy">检测到风险或校验失败，需要人工确认后才能保存。</div>
-          <div v-if="requiresReason" class="gate-reason">
-            <label>确认原因</label>
-            <input v-model="confirmReason" type="text" placeholder="填写原因" />
-          </div>
-          <div class="gate-actions">
-            <button
-              class="btn ghost"
-              type="button"
-              :disabled="requiresReason && !confirmReason.trim() && !humanConfirmed"
-              @click="humanConfirmed = !humanConfirmed"
-            >
-              {{ humanConfirmed ? "已确认" : "人工确认" }}
-            </button>
-          </div>
-        </div>
-
-        <div v-if="executeResult" class="execution-result" :class="executeResult.status">
-          <div class="result-title">
-            执行结果: {{ executeResult.status }}
-            <span v-if="executeResult.code">(code {{ executeResult.code }})</span>
-          </div>
-          <div v-if="executeResult.error" class="result-error">{{ executeResult.error }}</div>
-          <div class="result-io">
-            <div v-if="executeResult.stdout" class="result-block">
-              <div class="result-label">stdout</div>
-              <pre>{{ executeResult.stdout }}</pre>
-            </div>
-            <div v-if="executeResult.stderr" class="result-block">
-              <div class="result-label">stderr</div>
-              <pre>{{ executeResult.stderr }}</pre>
-            </div>
-          </div>
-        </div>
+        <div v-else class="empty">暂无草稿历史</div>
       </div>
     </div>
   </section>
@@ -324,6 +417,14 @@ type ProgressEvent = {
   node: string;
   status: string;
   message?: string;
+};
+
+type ChatEntry = {
+  id: string;
+  label: string;
+  body: string;
+  type: string;
+  extra?: string;
 };
 
 type SummaryState = {
@@ -359,6 +460,14 @@ const yamlRef = ref<HTMLTextAreaElement | null>(null);
 const busy = ref(false);
 const streamError = ref("");
 const progressEvents = ref<ProgressEvent[]>([]);
+const chatEntries = ref<ChatEntry[]>([
+  {
+    id: "welcome",
+    label: "AI",
+    body: "你好！告诉我你的需求，我会拆解成可执行工作流，并主动追问缺失细节。",
+    type: "ai"
+  }
+]);
 const selectedStep = ref("");
 const stepIssueIndexes = ref<number[]>([]);
 const draftId = ref("");
@@ -394,7 +503,16 @@ const examples = [
   "拉取脚本库中的备份脚本并执行"
 ];
 
+const showExamples = ref(false);
+const showConfigModal = ref(false);
+const showSummaryModal = ref(false);
+const showHistoryModal = ref(false);
+
+const workspaceTab = ref<"visual" | "yaml" | "validate">("visual");
 const steps = computed<StepSummary[]>(() => parseSteps(yaml.value));
+const timelineEntries = computed(() => {
+  return chatEntries.value;
+});
 const requiresReason = computed(() => summary.value.riskLevel === "high");
 const requiresConfirm = computed(() => {
   if (!summary.value.needsReview) return false;
@@ -403,7 +521,18 @@ const requiresConfirm = computed(() => {
   return false;
 });
 const historyTimeline = computed<HistoryEntry[]>(() => buildHistoryTimeline());
+const draftTitle = computed(() => {
+  if (draftId.value) return `ai-${draftId.value.slice(0, 6)}`;
+  return "ai-draft";
+});
+const draftStatus = computed(() => {
+  if (draftId.value) return "已保存";
+  if (yaml.value.trim()) return "未保存";
+  return "未生成";
+});
+const confirmStatus = computed(() => (validation.value.ok ? "正常" : "需处理"));
 
+let chatIndex = 0;
 let summaryTimer: number | null = null;
 watch(yaml, () => {
   if (summaryTimer) {
@@ -431,8 +560,23 @@ async function loadValidationEnvs() {
   }
 }
 
+function pushChatEntry(entry: Omit<ChatEntry, "id">) {
+  const id = `chat-${chatIndex++}`;
+  chatEntries.value = [...chatEntries.value, { id, ...entry }];
+}
+
 function applyExample(text: string) {
   prompt.value = text;
+  showExamples.value = false;
+}
+
+function toggleExamples() {
+  showExamples.value = !showExamples.value;
+}
+
+function clearPrompt() {
+  prompt.value = "";
+  showExamples.value = false;
 }
 
 function formatNode(node: string) {
@@ -461,6 +605,57 @@ function focusStep(step: StepSummary) {
   textarea.scrollTop = Math.max(0, lineIndex * lineHeight - lineHeight);
 }
 
+function appendStep() {
+  const baseName = "新建步骤";
+  const existingNames = steps.value.map((step) => step.name).filter(Boolean);
+  let suffix = 1;
+  let stepName = baseName;
+  while (existingNames.includes(stepName)) {
+    suffix += 1;
+    stepName = `${baseName} ${suffix}`;
+  }
+  const baseLines = [
+    `- name: ${stepName}`,
+    "  action: cmd.run",
+    "  targets: []",
+    "  cmd: echo '待补充'"
+  ];
+  const trimmed = yaml.value.trim();
+  if (!trimmed) {
+    const indented = baseLines.map((line) => `  ${line}`).join("\n");
+    yaml.value = `steps:\n${indented}`;
+    return;
+  }
+  const lines = yaml.value.split(/\r?\n/);
+  const stepsIndex = lines.findIndex((line) => /^\s*steps\s*:/.test(line));
+  if (stepsIndex < 0) {
+    const indented = baseLines.map((line) => `  ${line}`).join("\n");
+    yaml.value = `${trimmed}\n\nsteps:\n${indented}`;
+    return;
+  }
+  const stepsIndent = lines[stepsIndex].match(/^(\s*)/)[1].length;
+  if (/^\s*steps\s*:\s*\[\s*\]\s*$/.test(lines[stepsIndex])) {
+    const prefix = lines[stepsIndex].match(/^(\s*)/)[1];
+    lines[stepsIndex] = `${prefix}steps:`;
+  }
+  const stepIndent = " ".repeat(stepsIndent + 2);
+  const stepLines = baseLines.map((line) => `${stepIndent}${line}`);
+  let insertAt = lines.length;
+  for (let i = stepsIndex + 1; i < lines.length; i += 1) {
+    const line = lines[i];
+    if (line.trim() === "") {
+      continue;
+    }
+    const indent = line.match(/^(\s*)/)[1].length;
+    if (indent <= stepsIndent) {
+      insertAt = i;
+      break;
+    }
+  }
+  lines.splice(insertAt, 0, ...stepLines);
+  yaml.value = lines.join("\n");
+}
+
 function buildContext() {
   const packages = envPackages.value
     .split(/,\s*/)
@@ -487,6 +682,8 @@ function buildContext() {
 
 async function startStream() {
   if (!prompt.value.trim()) return;
+  pushChatEntry({ label: "用户", body: prompt.value.trim(), type: "user" });
+  showExamples.value = false;
   busy.value = true;
   streamError.value = "";
   progressEvents.value = [];
@@ -516,6 +713,12 @@ async function streamWorkflow(payload: Record<string, unknown>) {
   });
   if (!response.ok || !response.body) {
     streamError.value = "流式连接失败";
+    pushChatEntry({
+      label: "系统",
+      body: streamError.value,
+      type: "error",
+      extra: "ERROR"
+    });
     return;
   }
 
@@ -553,10 +756,25 @@ function handleSSEChunk(chunk: string) {
     const payload = JSON.parse(data);
     if (eventName === "status") {
       progressEvents.value = [...progressEvents.value, payload].slice(-40);
+      const evt = payload as ProgressEvent;
+      if (evt.status === "error" && evt.message) {
+        pushChatEntry({
+          label: formatNode(evt.node || "AI"),
+          body: evt.message,
+          type: "error",
+          extra: "ERROR"
+        });
+      }
     } else if (eventName === "result") {
       applyResult(payload);
     } else if (eventName === "error") {
       streamError.value = payload.error || "生成失败";
+      pushChatEntry({
+        label: "系统",
+        body: streamError.value,
+        type: "error",
+        extra: "ERROR"
+      });
     }
   } catch (err) {
     streamError.value = "解析流式数据失败";
@@ -574,6 +792,19 @@ function applyResult(payload: Record<string, unknown>) {
   summary.value.riskLevel = String(payload.risk_level || "");
   summary.value.needsReview = Boolean(payload.needs_review);
   summary.value.issues = Array.isArray(payload.issues) ? payload.issues : [];
+  const summaryText = typeof payload.summary === "string" && payload.summary.trim()
+    ? payload.summary.trim()
+    : "草稿已生成";
+  const riskText = payload.risk_level ? `风险 ${payload.risk_level}` : "";
+  const issueCount = Array.isArray(payload.issues) ? payload.issues.length : 0;
+  const issueText = issueCount ? `问题 ${issueCount}` : "";
+  const resultBody = [summaryText, riskText, issueText].filter(Boolean).join(" · ");
+  pushChatEntry({
+    label: "AI",
+    body: resultBody || "草稿已生成",
+    type: issueCount ? "warn" : "ai",
+    extra: "DONE"
+  });
   if (Array.isArray(payload.history)) {
     history.value = payload.history.filter((item) => typeof item === "string");
   }
@@ -622,6 +853,13 @@ async function validateDraft() {
     const issues = data.issues || [];
     validation.value = { ok: data.ok, issues };
     stepIssueIndexes.value = data.ok ? [] : deriveStepIssues(issues);
+    const issueText = issues.length ? issues.slice(0, 2).join(" · ") : "未发现问题";
+    pushChatEntry({
+      label: "校验",
+      body: data.ok ? `校验通过：${issueText}` : `校验失败：${issueText}`,
+      type: data.ok ? "ai" : "warn",
+      extra: data.ok ? "OK" : "WARN"
+    });
   } catch (err) {
     const apiErr = err as ApiError;
     validation.value = {
@@ -629,6 +867,12 @@ async function validateDraft() {
       issues: [apiErr.message ? `校验失败: ${apiErr.message}` : "校验失败，请检查服务是否启动"]
     };
     stepIssueIndexes.value = [];
+    pushChatEntry({
+      label: "校验",
+      body: validation.value.issues[0],
+      type: "error",
+      extra: "ERROR"
+    });
   } finally {
     validationBusy.value = false;
   }
@@ -644,12 +888,26 @@ async function runExecution() {
       body: { yaml: yaml.value, env: selectedValidationEnv.value || undefined }
     });
     executeResult.value = data;
+    const codeText = typeof data.code === "number" ? ` (code ${data.code})` : "";
+    const isSuccess = data.status === "success";
+    pushChatEntry({
+      label: "执行",
+      body: `沙箱验证完成：${data.status}${codeText}`,
+      type: isSuccess ? "ai" : "warn",
+      extra: data.status?.toUpperCase()
+    });
   } catch (err) {
     const apiErr = err as ApiError;
     executeResult.value = {
       status: "failed",
       error: apiErr.message ? `验证失败: ${apiErr.message}` : "验证失败，请检查服务是否启动"
     };
+    pushChatEntry({
+      label: "执行",
+      body: executeResult.value.error || "验证失败",
+      type: "error",
+      extra: "ERROR"
+    });
   } finally {
     executeBusy.value = false;
   }
@@ -757,124 +1015,42 @@ function diffSummary(prev: string, next: string) {
   display: flex;
   flex-direction: column;
   gap: 24px;
-  padding-bottom: 32px;
+  padding: 24px;
   color: var(--ink);
+  flex: 1;
+  min-height: 0;
 }
 
-.hero {
-  position: relative;
+.main-grid {
   display: grid;
-  grid-template-columns: minmax(280px, 1fr) minmax(240px, 0.6fr);
+  grid-template-columns: minmax(360px, 1.25fr) minmax(320px, 0.95fr);
   gap: 20px;
-  padding: 28px;
-  border-radius: 24px;
-  background: radial-gradient(circle at top left, #fff0e5, #f4f1ec 55%, #f9f8f6 100%);
-  border: 1px solid rgba(27, 27, 27, 0.08);
-  overflow: hidden;
-}
-
-.hero::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  background: linear-gradient(120deg, rgba(232, 93, 42, 0.08), rgba(46, 111, 227, 0.08));
-  pointer-events: none;
-}
-
-.hero-copy {
-  position: relative;
-  z-index: 1;
-}
-
-.eyebrow {
-  display: inline-flex;
-  font-size: 12px;
-  letter-spacing: 0.16em;
-  text-transform: uppercase;
-  color: var(--muted);
-  margin-bottom: 10px;
-}
-
-.hero h1 {
-  font-family: "Space Grotesk", "Manrope", sans-serif;
-  font-size: 32px;
-  margin: 0 0 8px;
-}
-
-.hero p {
-  margin: 0 0 18px;
-  color: var(--muted);
-  max-width: 520px;
-}
-
-.hero-actions {
-  display: flex;
-  gap: 12px;
-}
-
-.hero-card {
-  position: relative;
-  z-index: 1;
-  background: #ffffff;
-  border-radius: 18px;
-  border: 1px solid rgba(27, 27, 27, 0.08);
-  padding: 16px;
-  display: grid;
-  gap: 12px;
-  box-shadow: var(--shadow);
-}
-
-.hero-stat {
-  display: flex;
-  justify-content: space-between;
-  font-size: 13px;
-  color: var(--muted);
-}
-
-.hero-stat .value {
-  color: var(--ink);
-  font-weight: 600;
-}
-
-.risk-high {
-  color: var(--err);
-}
-
-.risk-medium {
-  color: var(--warn);
-}
-
-.risk-low {
-  color: var(--ok);
-}
-
-.composer-grid,
-.result-grid {
-  display: grid;
-  gap: 18px;
-  grid-template-columns: minmax(320px, 1fr) minmax(320px, 0.8fr);
+  flex: 1;
+  min-height: 0;
+  grid-template-rows: minmax(0, 1fr);
 }
 
 .panel {
   background: var(--panel);
-  border-radius: 18px;
+  border-radius: 20px;
   border: 1px solid rgba(27, 27, 27, 0.08);
   box-shadow: var(--shadow);
-  padding: 18px;
+  padding: 20px;
   display: flex;
   flex-direction: column;
   gap: 16px;
+  min-height: 0;
 }
 
 .panel-head {
   display: flex;
   justify-content: space-between;
-  gap: 16px;
+  gap: 12px;
   align-items: center;
 }
 
 .panel-head h2 {
-  margin: 0 0 4px;
+  margin: 0;
   font-size: 20px;
   font-family: "Space Grotesk", "Manrope", sans-serif;
 }
@@ -885,12 +1061,58 @@ function diffSummary(prev: string, next: string) {
   font-size: 13px;
 }
 
+.chat-head {
+  align-items: flex-start;
+}
+
+.panel-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.draft-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(27, 27, 27, 0.06);
+  background: rgba(255, 255, 255, 0.65);
+}
+
+.draft-stat {
+  display: flex;
+  justify-content: space-between;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.draft-stat strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.risk-low {
+  color: var(--ok);
+}
+
+.risk-medium {
+  color: var(--warn);
+}
+
+.risk-high {
+  color: var(--err);
+}
+
 .status-tag {
-  padding: 6px 10px;
+  padding: 6px 12px;
   border-radius: 999px;
   font-size: 12px;
-  background: #f6f2ec;
   color: var(--muted);
+  background: #f6f2ec;
 }
 
 .status-tag.ok {
@@ -913,6 +1135,83 @@ function diffSummary(prev: string, next: string) {
   background: rgba(46, 111, 227, 0.12);
 }
 
+.chat-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+}
+
+.chat-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.timeline {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.timeline-item {
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.4);
+  border-radius: 14px;
+  border: 1px solid rgba(27, 27, 27, 0.08);
+}
+
+.timeline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.timeline-badge {
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.timeline-badge.user {
+  background: rgba(46, 111, 227, 0.12);
+  color: var(--info);
+}
+
+.timeline-badge.ai {
+  background: rgba(42, 157, 75, 0.12);
+  color: var(--ok);
+}
+
+.timeline-badge.warn {
+  background: rgba(230, 167, 0, 0.12);
+  color: var(--warn);
+}
+
+.timeline-badge.error {
+  background: rgba(208, 52, 44, 0.12);
+  color: var(--err);
+}
+
+.composer {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.chat-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 textarea,
 input,
 select {
@@ -922,11 +1221,13 @@ select {
   font-size: 13px;
   font-family: "IBM Plex Mono", "Space Grotesk", sans-serif;
   background: #fff;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 textarea {
   resize: vertical;
-  min-height: 120px;
+  min-height: 90px;
 }
 
 .example-row {
@@ -943,75 +1244,188 @@ textarea {
   background: #fff;
 }
 
-.constraints {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+.chip.subtle {
+  background: #f3eee7;
+  color: var(--muted);
+  border-color: rgba(27, 27, 27, 0.1);
+}
+
+.chip.secondary {
+  background: rgba(230, 167, 0, 0.12);
+  color: var(--warn);
+  border-color: rgba(230, 167, 0, 0.3);
+}
+
+.composer-footer {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.btn {
+  border: 1px solid rgba(27, 27, 27, 0.16);
+  background: #fff;
+  border-radius: 10px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.btn.primary {
+  background: var(--brand);
+  border-color: var(--brand);
+  color: #fff;
+  box-shadow: 0 12px 22px rgba(232, 93, 42, 0.24);
+}
+
+.btn.secondary {
+  background: #f7f2ec;
+  border-color: rgba(27, 27, 27, 0.12);
+  color: var(--ink);
+}
+
+.btn.ghost {
+  background: transparent;
+  color: var(--muted);
+}
+
+.btn.btn-sm {
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.workspace-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.workspace-head {
+  align-items: flex-start;
+}
+
+.workspace-title h2 {
+  margin: 0;
+}
+
+.workspace-title p {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.workspace-tags {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.workspace-tabs {
+  display: flex;
+  gap: 10px;
+}
+
+.tab {
+  flex: 1;
+  padding: 8px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(27, 27, 27, 0.1);
+  background: rgba(255, 255, 255, 0.75);
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tab.active {
+  background: #fff;
+  border-color: rgba(46, 111, 227, 0.35);
+  box-shadow: 0 1px 6px rgba(46, 111, 227, 0.18);
+}
+
+.tab-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.requirement-card {
+  background: rgba(255, 255, 255, 0.7);
+  border-radius: 16px;
+  border: 1px solid rgba(27, 27, 27, 0.08);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
   gap: 12px;
 }
 
-.field {
+.card-head {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.card-head h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.card-head p {
+  margin: 0;
   font-size: 12px;
   color: var(--muted);
 }
 
-.field.toggle {
-  grid-column: span 2;
-  flex-direction: row;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.toggle-btn {
-  border-radius: 999px;
-  padding: 6px 16px;
-  border: 1px solid rgba(27, 27, 27, 0.12);
-  background: #f7f2ec;
-  font-size: 12px;
-}
-
-.toggle-btn.on {
-  background: rgba(42, 157, 75, 0.12);
-  color: var(--ok);
-}
-
-.composer-actions,
-.yaml-actions {
-  display: flex;
+.card-grid {
+  display: grid;
   gap: 10px;
+}
+
+.card-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.card-row strong {
+  color: var(--ink);
+}
+
+.chip-row {
+  display: flex;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
-.progress-list {
+.steps-section {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
 }
 
-.progress-item {
-  display: grid;
-  grid-template-columns: 120px 80px 1fr;
-  gap: 10px;
+.steps-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.step-count {
   font-size: 12px;
-  padding: 8px 10px;
-  border-radius: 12px;
-  background: #f9f5f0;
-  animation: fadeInUp 0.35s ease;
+  color: var(--muted);
 }
 
-.progress-item .status {
-  text-transform: uppercase;
-  font-size: 11px;
-}
-
-.progress-item .status.error {
-  color: var(--err);
-}
-
-.progress-item .status.done {
-  color: var(--ok);
+.steps-list {
+  display: grid;
+  gap: 10px;
 }
 
 .step-card {
@@ -1047,6 +1461,46 @@ textarea {
 .step-targets {
   font-size: 12px;
   color: var(--muted);
+}
+
+.code {
+  font-family: "IBM Plex Mono", "Space Grotesk", sans-serif;
+  min-height: 200px;
+}
+
+.yaml-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+
+.validation-panel .validation-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.alert {
+  padding: 10px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  background: rgba(46, 111, 227, 0.08);
+}
+
+.alert.warn {
+  background: rgba(230, 167, 0, 0.12);
+}
+
+.alert.ok {
+  background: rgba(42, 157, 75, 0.12);
+}
+
+.issues {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--err);
 }
 
 .history {
@@ -1088,42 +1542,6 @@ textarea {
   color: var(--info);
 }
 
-.alert {
-  padding: 10px 12px;
-  border-radius: 12px;
-  font-size: 12px;
-  background: rgba(46, 111, 227, 0.08);
-}
-
-.alert.warn {
-  background: rgba(230, 167, 0, 0.12);
-}
-
-.alert.ok {
-  background: rgba(42, 157, 75, 0.12);
-}
-
-.alert.error {
-  background: rgba(208, 52, 44, 0.12);
-  color: var(--err);
-}
-
-.issues {
-  margin: 0;
-  padding-left: 18px;
-  font-size: 12px;
-  color: var(--err);
-}
-
-.summary {
-  display: grid;
-  gap: 8px;
-  background: #f9f5f0;
-  border-radius: 12px;
-  padding: 10px 12px;
-  font-size: 12px;
-}
-
 .human-gate {
   display: grid;
   gap: 10px;
@@ -1154,10 +1572,38 @@ textarea {
   color: var(--warn);
 }
 
-.summary-item {
+.progress-list {
   display: flex;
-  justify-content: space-between;
-  gap: 12px;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.progress-item {
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(27, 27, 27, 0.08);
+  background: #fff;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.progress-item .node {
+  font-weight: 600;
+}
+
+.progress-item .status {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.progress-item .status.error {
+  color: var(--err);
+}
+
+.progress-item .status.done {
+  color: var(--ok);
 }
 
 .execution-result {
@@ -1178,7 +1624,127 @@ textarea {
 
 .result-io pre {
   margin: 0;
-  font-size: 11px;
+  font-size: 12px;
+  background: #f4f4f4;
+  border-radius: 8px;
+  padding: 8px;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(24, 24, 24, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  z-index: 20;
+}
+
+.summary-modal,
+.config-modal,
+.history-modal {
+  width: min(560px, 100%);
+  background: #fff;
+  border-radius: 18px;
+  border: 1px solid rgba(27, 27, 27, 0.08);
+  box-shadow: 0 24px 40px rgba(27, 27, 27, 0.18);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.modal-head h3 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.modal-close {
+  border: none;
+  background: transparent;
+  font-size: 18px;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.modal-summary {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.modal-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.modal-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.modal-row strong {
+  color: var(--ink);
+}
+
+.modal-issues {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.form-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.form-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+  padding: 8px 10px;
+  border-radius: 12px;
+  border: 1px dashed rgba(27, 27, 27, 0.16);
+  background: rgba(250, 246, 240, 0.6);
+}
+
+.toggle-btn {
+  border-radius: 999px;
+  padding: 6px 14px;
+  border: 1px solid rgba(27, 27, 27, 0.12);
+  background: #f7f2ec;
+  font-size: 12px;
+}
+
+.toggle-btn.on {
+  background: rgba(42, 157, 75, 0.12);
+  color: var(--ok);
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .empty {
@@ -1186,29 +1752,17 @@ textarea {
   color: var(--muted);
 }
 
-@keyframes fadeInUp {
-  from {
-    opacity: 0;
-    transform: translateY(6px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
 @media (max-width: 980px) {
-  .hero,
-  .composer-grid,
-  .result-grid {
+  .main-grid {
     grid-template-columns: 1fr;
+    grid-template-rows: auto;
   }
 
-  .constraints {
-    grid-template-columns: 1fr;
+  .draft-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .progress-item {
+  .form-grid {
     grid-template-columns: 1fr;
   }
 }
