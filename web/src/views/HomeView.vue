@@ -179,7 +179,9 @@
           <div class="visual-grid">
             <div class="steps-section">
               <div class="steps-head">
-                <h3>步骤构建器</h3>
+                <button class="btn secondary btn-sm" type="button" @click="appendStep(newStepAction)">
+                  新增步骤
+                </button>
                 <div class="steps-head-actions">
                   <span class="step-count">{{ steps.length }} 步</span>
                   <select v-model="newStepAction" class="step-action-select">
@@ -191,9 +193,6 @@
                     <option value="script.python">script.python</option>
                     <option value="env.set">env.set</option>
                   </select>
-                  <button class="btn secondary btn-sm" type="button" @click="appendStep(newStepAction)">
-                    新增步骤
-                  </button>
                 </div>
               </div>
               <div v-if="steps.length" class="steps-list">
@@ -213,10 +212,7 @@
                   <div class="step-card-head">
                     <div>
                       <div class="step-name">{{ step.name }}</div>
-                      <div class="step-meta">
-                        {{ step.action || '未指定动作' }} ·
-                        {{ formatTargetsForInput(step.targets) || '未设置目标' }}
-                      </div>
+                      <div class="step-meta">{{ step.action || '未指定动作' }}</div>
                     </div>
                     <span class="step-status" :class="stepStatusClass(index)">
                       {{ stepStatus(index) }}
@@ -224,7 +220,7 @@
                   </div>
                   <div class="step-summary" v-if="step.required">{{ step.required }}</div>
                   <div class="step-actions">
-                    <button class="btn btn-sm" type="button" @click.stop="selectStep(index)">
+                    <button class="btn btn-sm" type="button" @click.stop="openStepDetailModal(index)">
                       详情
                     </button>
                     <button class="btn ghost btn-sm" type="button" @click.stop="duplicateStep(index)">
@@ -241,32 +237,6 @@
               </div>
               <div v-else class="empty">尚未解析到步骤，生成草稿获取可视化内容。</div>
             </div>
-            <aside class="step-detail-panel">
-              <div v-if="selectedStepIndex !== null && draftSteps[selectedStepIndex]" class="detail-inner">
-                <div class="detail-head">
-                  <h4>步骤详情</h4>
-                  <span class="step-status" :class="stepStatusClass(selectedStepIndex)">
-                    {{ stepStatus(selectedStepIndex) }}
-                  </span>
-                </div>
-                <StepDetailForm
-                  :step="draftSteps[selectedStepIndex]"
-                  @update-step="updateStepFromDraft(selectedStepIndex, $event)"
-                />
-                <div class="detail-actions">
-                  <button class="btn btn-sm" type="button" @click="openStepYamlModal(selectedStepIndex)">
-                    编辑 YAML
-                  </button>
-                  <button class="btn ghost btn-sm" type="button" @click="duplicateStep(selectedStepIndex)">
-                    复制
-                  </button>
-                  <button class="btn danger btn-sm" type="button" @click="removeStep(selectedStepIndex)">
-                    删除
-                  </button>
-                </div>
-              </div>
-              <div v-else class="empty">选择一个步骤进行编辑。</div>
-            </aside>
           </div>
         </div>
 
@@ -527,6 +497,37 @@
         <div v-else class="empty">暂无聊天会话</div>
       </div>
     </div>
+    <div v-if="showStepDetailModal" class="modal-backdrop" @click.self="closeStepDetailModal">
+      <div class="detail-modal">
+        <div class="modal-head">
+          <div class="detail-title">
+            <h3>步骤详情</h3>
+            <span v-if="detailStepIndex !== null" class="step-status" :class="stepStatusClass(detailStepIndex)">
+              {{ stepStatus(detailStepIndex) }}
+            </span>
+          </div>
+          <button class="modal-close" type="button" @click="closeStepDetailModal">&#10005;</button>
+        </div>
+        <div v-if="detailStepIndex !== null && draftSteps[detailStepIndex]" class="detail-body">
+          <StepDetailForm
+            :step="draftSteps[detailStepIndex]"
+            @update-step="updateStepFromDraft(detailStepIndex, $event)"
+          />
+        </div>
+        <div v-else class="empty">选择一个步骤进行编辑。</div>
+        <div class="detail-actions">
+          <button class="btn btn-sm" type="button" :disabled="detailStepIndex === null" @click="openStepYamlFromDetail">
+            编辑 YAML
+          </button>
+          <button class="btn ghost btn-sm" type="button" :disabled="detailStepIndex === null" @click="duplicateStepFromDetail">
+            复制
+          </button>
+          <button class="btn danger btn-sm" type="button" :disabled="detailStepIndex === null" @click="removeStepFromDetail">
+            删除
+          </button>
+        </div>
+      </div>
+    </div>
     <div v-if="showStepYamlModal" class="modal-backdrop" @click.self="closeStepYamlModal">
       <div class="yaml-modal">
         <div class="modal-head">
@@ -715,8 +716,6 @@ const executeEnabled = ref(false);
 const maxRetries = ref(2);
 const planMode = ref("manual-approve");
 const environmentNote = ref("");
-const targetSelections = ref<string[]>([]);
-const targetInput = ref("");
 const router = useRouter();
 const SESSION_STORAGE_KEY = "bops_chat_session_id";
 
@@ -730,6 +729,8 @@ const showExamples = ref(false);
 const showConfigModal = ref(false);
 const showHistoryModal = ref(false);
 const showSessionModal = ref(false);
+const showStepDetailModal = ref(false);
+const detailStepIndex = ref<number | null>(null);
 const showStepYamlModal = ref(false);
 const stepYamlIndex = ref<number | null>(null);
 const stepYamlText = ref("");
@@ -955,27 +956,6 @@ function toggleExamples() {
 function clearPrompt() {
   prompt.value = "";
   showExamples.value = false;
-}
-
-function commitTargetInput() {
-  const raw = targetInput.value;
-  const items = parseTargets(raw);
-  if (!items.length) {
-    targetInput.value = "";
-    return;
-  }
-  targetSelections.value = normalizeTargets([...targetSelections.value, ...items]);
-  targetInput.value = "";
-}
-
-function addTarget(value: string) {
-  const trimmed = value.trim();
-  if (!trimmed) return;
-  targetSelections.value = normalizeTargets([...targetSelections.value, trimmed]);
-}
-
-function removeTarget(index: number) {
-  targetSelections.value = targetSelections.value.filter((_, idx) => idx !== index);
 }
 
 function formatNode(node: string) {
@@ -1320,7 +1300,6 @@ function updateStepFromDraft(index: number | null, draftStep: DraftStep) {
   if (nextAction) {
     next = updateStepField(next, index, "action", nextAction);
   }
-  next = updateStepField(next, index, "targets", draftStep.targets);
 
   if (nextAction && nextAction !== previousAction) {
     next = clearStepWithFields(next, index);
@@ -1370,23 +1349,6 @@ function updateStepFromDraft(index: number | null, draftStep: DraftStep) {
   setVisualYaml(next);
 }
 
-function applyTargetsToAllSteps() {
-  if (!targetSelections.value.length) return;
-  const value = targetSelections.value.join(", ");
-  let next = getVisualYaml();
-  steps.value.forEach((_, index) => {
-    next = updateStepField(next, index, "targets", value);
-  });
-  setVisualYaml(next);
-}
-
-function applyTargetsToStep(index: number | null) {
-  if (index === null) return;
-  if (!targetSelections.value.length) return;
-  const value = targetSelections.value.join(", ");
-  setVisualYaml(updateStepField(getVisualYaml(), index, "targets", value));
-}
-
 function duplicateStep(index: number | null) {
   if (index === null) return;
   if (index < 0 || index >= steps.value.length) return;
@@ -1420,13 +1382,9 @@ function buildMultilineField(key: string, value: string) {
   return [`    ${key}: ${formatScalar(trimmed)}`];
 }
 
-function buildStepSnippet(name: string, action: string, targets: string[]) {
+function buildStepSnippet(name: string, action: string) {
   const trimmedName = name.trim() || "new step";
-  const normalizedTargets = normalizeTargets(targets);
   const lines = [`- name: ${trimmedName}`];
-  if (normalizedTargets.length) {
-    lines.push(`  targets: [${normalizedTargets.join(", ")}]`);
-  }
   lines.push(`  action: ${action}`);
   lines.push("  with:");
 
@@ -1682,6 +1640,16 @@ function updateStepField(content: string, index: number, field: "name" | "action
 
   const next = [...lines.slice(0, start), ...block, ...lines.slice(end)];
   return next.join("\n");
+}
+
+function stripTargetsFromYaml(content: string) {
+  const data = getStepBlocks(content);
+  if (!data) return content;
+  let next = content;
+  for (let index = 0; index < data.blocks.length; index += 1) {
+    next = updateStepField(next, index, "targets", "");
+  }
+  return next;
 }
 
 function updateStepWithField(
@@ -2059,6 +2027,36 @@ function selectStep(index: number) {
   selectedStepIndex.value = index;
 }
 
+function openStepDetailModal(index: number) {
+  selectedStepIndex.value = index;
+  detailStepIndex.value = index;
+  showStepDetailModal.value = true;
+}
+
+function closeStepDetailModal() {
+  showStepDetailModal.value = false;
+  detailStepIndex.value = null;
+}
+
+function openStepYamlFromDetail() {
+  if (detailStepIndex.value === null) return;
+  closeStepDetailModal();
+  openStepYamlModal(detailStepIndex.value);
+}
+
+function duplicateStepFromDetail() {
+  if (detailStepIndex.value === null) return;
+  const current = detailStepIndex.value;
+  duplicateStep(current);
+  detailStepIndex.value = current + 1;
+}
+
+function removeStepFromDetail() {
+  if (detailStepIndex.value === null) return;
+  removeStep(detailStepIndex.value);
+  closeStepDetailModal();
+}
+
 function appendStep(action = "cmd.run") {
   const baseName = "新建步骤";
   const existingNames = steps.value.map((step) => step.name).filter(Boolean);
@@ -2068,7 +2066,7 @@ function appendStep(action = "cmd.run") {
     suffix += 1;
     stepName = `${baseName} ${suffix}`;
   }
-  const baseLines = buildStepSnippet(stepName, action, targetSelections.value);
+  const baseLines = buildStepSnippet(stepName, action);
   const content = getVisualYaml();
   const trimmed = content.trim();
   if (!trimmed) {
@@ -2114,9 +2112,6 @@ function buildContext() {
   };
   if (environmentNote.value.trim()) {
     payload.environment = environmentNote.value.trim();
-  }
-  if (targetSelections.value.length) {
-    payload.targets = [...targetSelections.value];
   }
   if (packages.length) {
     payload.env_packages = packages;
@@ -2234,7 +2229,7 @@ function handleSSEChunk(chunk: string) {
 function applyResult(payload: Record<string, unknown>) {
   const nextYaml = typeof payload.yaml === "string" ? payload.yaml : "";
   if (nextYaml) {
-    yaml.value = nextYaml;
+    yaml.value = stripTargetsFromYaml(nextYaml);
   }
   if (typeof payload.summary === "string") {
     summary.value.summary = payload.summary;
@@ -2292,9 +2287,10 @@ async function validateDraft() {
   validationTouched.value = true;
   validationBusy.value = true;
   try {
+    const payloadYaml = stripTargetsFromYaml(yaml.value);
     const data = await request<{ ok: boolean; issues?: string[] }>("/workflows/_draft/validate", {
       method: "POST",
-      body: { yaml: yaml.value }
+      body: { yaml: payloadYaml }
     });
     const issues = data.issues || [];
     validation.value = { ok: data.ok, issues };
@@ -2332,9 +2328,10 @@ async function runExecution() {
   executeBusy.value = true;
   executeResult.value = null;
   try {
+    const payloadYaml = stripTargetsFromYaml(yaml.value);
     const data = await request<ExecutionResult>("/ai/workflow/execute", {
       method: "POST",
-      body: { yaml: yaml.value, env: selectedValidationEnv.value || undefined }
+      body: { yaml: payloadYaml, env: selectedValidationEnv.value || undefined }
     });
     executeResult.value = data;
     const codeText = typeof data.code === "number" ? ` (code ${data.code})` : "";
@@ -2417,10 +2414,11 @@ async function saveWorkflow(name?: string) {
   saveError.value = "";
   const reason = confirmReason.value.trim();
   saveBusy.value = true;
+  const payloadYaml = stripTargetsFromYaml(yaml.value);
   try {
     await request(`/workflows/${trimmed}`, {
       method: "PUT",
-      body: { yaml: yaml.value, confirm_reason: reason || undefined }
+      body: { yaml: payloadYaml, confirm_reason: reason || undefined }
     });
     draftId.value = "";
     confirmReason.value = "";
@@ -2438,7 +2436,7 @@ async function saveWorkflow(name?: string) {
 function restoreHistory(index: number) {
   const snapshot = history.value[index];
   if (snapshot) {
-    yaml.value = snapshot;
+    yaml.value = stripTargetsFromYaml(snapshot);
     humanConfirmed.value = false;
     confirmReason.value = "";
     selectedStepIndex.value = null;
@@ -2998,7 +2996,7 @@ textarea {
 
 .visual-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.2fr) minmax(0, 0.8fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   min-height: 0;
   height: 100%;
@@ -3016,6 +3014,7 @@ textarea {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 12px;
 }
 
 .steps-head-actions {
@@ -3037,7 +3036,7 @@ textarea {
 
 .steps-list {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   overflow: auto;
   min-height: 0;
   flex: 1;
@@ -3045,9 +3044,9 @@ textarea {
 }
 
 .step-card {
-  border-radius: 14px;
+  border-radius: 12px;
   border: 1px solid rgba(27, 27, 27, 0.08);
-  padding: 12px;
+  padding: 10px;
   background: #fff;
   cursor: pointer;
   text-align: left;
@@ -3083,18 +3082,18 @@ textarea {
 
 .step-name {
   font-weight: 600;
+  font-size: 13px;
 }
 
-.step-meta,
-.step-targets {
-  font-size: 12px;
+.step-meta {
+  font-size: 11px;
   color: var(--muted);
 }
 
 .step-status {
-  padding: 3px 10px;
+  padding: 2px 8px;
   border-radius: 999px;
-  font-size: 10px;
+  font-size: 9px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   border: 1px solid transparent;
@@ -3131,34 +3130,16 @@ textarea {
 }
 
 .step-summary {
-  margin-top: 6px;
-  font-size: 12px;
+  margin-top: 4px;
+  font-size: 11px;
   color: var(--muted);
 }
 
 .step-actions {
-  margin-top: 10px;
+  margin-top: 8px;
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
-}
-
-.step-detail-panel {
-  border-radius: 16px;
-  border: 1px solid rgba(27, 27, 27, 0.08);
-  padding: 14px;
-  background: rgba(255, 255, 255, 0.7);
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: auto;
-}
-
-.detail-inner {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  min-height: 0;
 }
 
 .detail-head {
@@ -3378,7 +3359,8 @@ textarea {
 .config-modal,
 .history-modal,
 .yaml-modal,
-.save-modal {
+.save-modal,
+.detail-modal {
   width: min(560px, 100%);
   background: #fff;
   border-radius: 18px;
@@ -3400,6 +3382,25 @@ textarea {
 .modal-head h3 {
   margin: 0;
   font-size: 18px;
+}
+
+.detail-modal {
+  width: min(640px, 100%);
+  max-height: 85vh;
+  overflow: hidden;
+}
+
+.detail-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.detail-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
 }
 
 .modal-close {

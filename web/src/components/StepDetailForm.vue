@@ -18,16 +18,6 @@
       </select>
     </div>
 
-    <div class="field">
-      <label>目标</label>
-      <input
-        :value="step.targets"
-        @input="updateField('targets', $event.target.value)"
-        type="text"
-        placeholder="web, db"
-      />
-    </div>
-
     <template v-if="step.action === 'cmd.run'">
       <div class="field">
         <label>命令</label>
@@ -152,7 +142,7 @@ function updateStep(partial: Partial<DraftStep>) {
 }
 
 function updateField(field: keyof DraftStep, value: string) {
-  if (field === "name" || field === "targets" || field === "action") {
+  if (field === "name" || field === "action") {
     updateStep({ [field]: value } as Partial<DraftStep>);
   }
 }
