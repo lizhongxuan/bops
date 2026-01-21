@@ -100,54 +100,6 @@
       </section>
 
       <section class="panel workspace-panel">
-        <div class="panel-head workspace-head">
-          <div class="workspace-title">
-            <h2>工作流工作区</h2>
-          </div>
-          <div class="panel-actions">
-            <div class="sync-controls">
-              <span class="sync-label">同步</span>
-              <button
-                class="toggle-btn"
-                type="button"
-                :class="autoSync ? 'on' : 'off'"
-                @click="toggleAutoSync"
-              >
-                {{ autoSync ? '自动同步' : '同步关闭' }}
-              </button>
-              <button
-                v-if="!autoSync && visualDirty"
-                class="btn btn-sm"
-                type="button"
-                @click="applyVisualToYaml"
-              >
-                应用到 YAML
-              </button>
-              <button
-                v-if="!autoSync && yamlDirty"
-                class="btn btn-sm"
-                type="button"
-                @click="syncVisualFromYaml"
-              >
-                从 YAML 更新
-              </button>
-              <span v-if="!autoSync && visualDirty" class="sync-tag warn">视觉未同步</span>
-              <span v-if="!autoSync && yamlDirty" class="sync-tag warn">YAML 已更新</span>
-            </div>
-            <button
-              class="btn ghost btn-sm"
-              type="button"
-              :disabled="!historyTimeline.length"
-              @click="showHistoryModal = true"
-            >
-              草稿历史
-            </button>
-            <div class="status-tag" :class="validation.ok ? 'ok' : 'warn'">
-              {{ validation.ok ? '校验通过' : '待修复' }}
-            </div>
-          </div>
-        </div>
-
         <div class="workspace-tabs">
           <button
             type="button"
@@ -174,15 +126,49 @@
             校验与执行
           </button>
         </div>
+        <div class="workspace-toolbar">
+          <div class="sync-controls">
+            <span class="sync-label">同步</span>
+            <button
+              class="toggle-btn"
+              type="button"
+              :class="autoSync ? 'on' : 'off'"
+              @click="toggleAutoSync"
+            >
+              {{ autoSync ? '自动同步' : '同步关闭' }}
+            </button>
+            <button v-if="!autoSync && visualDirty" class="btn btn-sm" type="button" @click="applyVisualToYaml">
+              应用到 YAML
+            </button>
+            <button v-if="!autoSync && yamlDirty" class="btn btn-sm" type="button" @click="syncVisualFromYaml">
+              从 YAML 更新
+            </button>
+            <span v-if="!autoSync && visualDirty" class="sync-tag warn">视觉未同步</span>
+            <span v-if="!autoSync && yamlDirty" class="sync-tag warn">YAML 已更新</span>
+          </div>
+          <button
+            class="btn ghost btn-sm"
+            type="button"
+            :disabled="!historyTimeline.length"
+            @click="showHistoryModal = true"
+          >
+            草稿历史
+          </button>
+          <div class="status-tag" :class="validation.ok ? 'ok' : 'warn'">
+            {{ validation.ok ? '校验通过' : '待修复' }}
+          </div>
+        </div>
 
         <div v-if="workspaceTab === 'visual'" class="tab-panel">
           <div class="visual-grid">
             <div class="steps-section">
               <div class="steps-head">
-                <button class="btn secondary btn-sm" type="button" @click="appendStep(newStepAction)">
-                  新增步骤
-                </button>
-                <div class="steps-head-actions">
+                <div class="steps-head-left">
+                  <button class="btn secondary btn-sm" type="button" @click="appendStep(newStepAction)">
+                    新增步骤
+                  </button>
+                </div>
+                <div class="steps-head-right">
                   <span class="step-count">{{ steps.length }} 步</span>
                   <select v-model="newStepAction" class="step-action-select">
                     <option value="cmd.run">cmd.run</option>
@@ -1973,8 +1959,26 @@ function appendStep(action = "cmd.run") {
   const content = getVisualYaml();
   const trimmed = content.trim();
   if (!trimmed) {
+    const defaultName = draftId.value ? `ai-${draftId.value.slice(0, 6)}` : "draft-workflow";
     const indented = baseLines.map((line) => `  ${line}`).join("\n");
-    setVisualYaml(`steps:\n${indented}`);
+    const seed = [
+      "version: v0.1",
+      `name: ${defaultName}`,
+      "description: ",
+      "",
+      "inventory:",
+      "  hosts:",
+      "    local:",
+      "      address: 127.0.0.1",
+      "",
+      "plan:",
+      `  mode: ${planMode.value}`,
+      "  strategy: sequential",
+      "",
+      "steps:",
+      indented
+    ].join("\n");
+    setVisualYaml(seed);
     return;
   }
   const lines = content.split(/\r?\n/);
@@ -2407,34 +2411,36 @@ function diffSummary(prev: string, next: string) {
 .home-ai {
   display: flex;
   flex-direction: column;
-  gap: 24px;
-  padding: 24px;
+  gap: 16px;
+  padding: 12px;
   color: var(--ink);
   flex: 1;
+  height: 100%;
   min-height: 0;
-  background: radial-gradient(1200px 600px at 10% 0%, #fff7ee 0%, #f3ece2 45%, #efe7db 100%);
+  background: transparent;
 }
 
 .main-grid {
   display: grid;
   grid-template-columns: minmax(360px, 1.25fr) minmax(320px, 0.95fr);
-  gap: 20px;
+  gap: 12px;
   flex: 1;
   min-height: 0;
   grid-template-rows: minmax(0, 1fr);
+  height: 100%;
 }
 
 .panel {
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(255, 255, 255, 0.82));
+  background: #fff;
   border-radius: 20px;
   border: 1px solid rgba(27, 27, 27, 0.08);
   box-shadow: var(--shadow);
-  padding: 20px;
+  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
   min-height: 0;
-  backdrop-filter: blur(6px);
+  height: 100%;
 }
 
 .panel-head {
@@ -2690,6 +2696,11 @@ function diffSummary(prev: string, next: string) {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  align-items: center;
+}
+
+.chat-status {
+  margin-left: auto;
 }
 
 textarea,
@@ -2796,30 +2807,10 @@ textarea {
   overflow: hidden;
 }
 
-.workspace-head {
-  align-items: flex-start;
-}
-
-.workspace-title h2 {
-  margin: 0;
-}
-
-.workspace-title p {
-  margin: 6px 0 0;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.workspace-tags {
-  display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
-  margin-top: 8px;
-}
-
 .workspace-tabs {
   display: flex;
   gap: 10px;
+  flex-wrap: wrap;
 }
 
 .tab {
@@ -2845,7 +2836,23 @@ textarea {
   gap: 16px;
   flex: 1;
   min-height: 0;
+  overflow: hidden;
+}
+
+.validation-panel {
   overflow: auto;
+}
+
+.workspace-toolbar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: space-between;
+}
+
+.workspace-toolbar .status-tag {
+  margin-left: auto;
 }
 
 .requirement-card {
@@ -2911,6 +2918,7 @@ textarea {
   flex-direction: column;
   gap: 12px;
   min-height: 0;
+  height: 100%;
 }
 
 .steps-head {
@@ -2920,11 +2928,15 @@ textarea {
   gap: 12px;
 }
 
-.steps-head-actions {
+.steps-head-left,
+.steps-head-right {
   display: flex;
   gap: 8px;
   align-items: center;
   flex-wrap: wrap;
+}
+
+.steps-head-right {
   justify-content: flex-end;
 }
 
@@ -2940,7 +2952,7 @@ textarea {
 .steps-list {
   display: grid;
   gap: 8px;
-  overflow: auto;
+  overflow-y: auto;
   min-height: 0;
   flex: 1;
   padding-right: 2px;
@@ -2953,6 +2965,10 @@ textarea {
   background: #fff;
   cursor: pointer;
   text-align: left;
+  height: 120px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
   transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
   animation: fade-up 0.35s ease;
 }
@@ -3039,7 +3055,7 @@ textarea {
 }
 
 .step-actions {
-  margin-top: 8px;
+  margin-top: auto;
   display: flex;
   gap: 6px;
   flex-wrap: wrap;
