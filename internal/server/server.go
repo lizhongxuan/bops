@@ -27,6 +27,8 @@ type Server struct {
 	Addr            string
 	StaticDir       string
 	CORSOrigins     []string
+	configPath      string
+	cfg             config.Config
 	mux             *http.ServeMux
 	http            *http.Server
 	store           *workflowstore.Store
@@ -44,7 +46,10 @@ type Server struct {
 	auditLogPath    string
 }
 
-func New(cfg config.Config) *Server {
+func New(cfg config.Config, configPath string) *Server {
+	if strings.TrimSpace(configPath) == "" {
+		configPath = config.ResolvePath("")
+	}
 	mux := http.NewServeMux()
 	bus := eventbus.New()
 	aiClient, _ := ai.NewClient(ai.Config{
@@ -68,6 +73,8 @@ func New(cfg config.Config) *Server {
 		Addr:            cfg.ServerListen,
 		StaticDir:       cfg.StaticDir,
 		CORSOrigins:     cfg.CORSOrigins,
+		configPath:      configPath,
+		cfg:             cfg,
 		mux:             mux,
 		store:           workflowstore.New(filepath.Join(cfg.DataDir, "workflows")),
 		envStore:        envstore.New(filepath.Join(cfg.DataDir, "envs")),

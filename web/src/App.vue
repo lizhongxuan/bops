@@ -24,7 +24,8 @@ const hideTopbarTitle = computed(() =>
     "run-console",
     "envs",
     "validation-envs",
-    "scripts"
+    "scripts",
+    "settings"
   ].includes(routeName.value)
 );
 
@@ -37,6 +38,7 @@ const pageTitle = computed(() => {
   if (routeName.value === "run-console") return "运行控制台";
   if (routeName.value === "validation-envs") return "验证环境";
   if (routeName.value === "scripts") return "脚本库";
+  if (routeName.value === "settings") return "设置";
   return "BOPS";
 });
 
@@ -60,7 +62,7 @@ const showSwitch = computed(() => hasWorkflow.value);
         <RouterLink class="nav-item" active-class="active" to="/validation-envs">验证环境</RouterLink>
         <RouterLink class="nav-item" active-class="active" to="/scripts">脚本库</RouterLink>
         <RouterLink class="nav-item" active-class="active" to="/runs">运行记录</RouterLink>
-        <a class="nav-item" href="#">设置</a>
+        <RouterLink class="nav-item" active-class="active" to="/settings">设置</RouterLink>
       </nav>
       <div class="workflow-group">
         <div class="group-title">当前工作流</div>

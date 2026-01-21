@@ -10,6 +10,7 @@ import RunConsoleView from "./views/RunConsoleView.vue";
 import EnvPackagesView from "./views/EnvPackagesView.vue";
 import ValidationEnvsView from "./views/ValidationEnvsView.vue";
 import ScriptsView from "./views/ScriptsView.vue";
+import SettingsView from "./views/SettingsView.vue";
 import "./styles/tokens.css";
 import "./styles/global.css";
 
@@ -65,6 +66,11 @@ const router = createRouter({
       path: "/runs",
       name: "runs",
       component: RunsView
+    },
+    {
+      path: "/settings",
+      name: "settings",
+      component: SettingsView
     }
   ]
 });

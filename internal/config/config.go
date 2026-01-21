@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 )
 
 // Config defines process-level settings loaded from a JSON file.
@@ -39,17 +40,22 @@ func DefaultConfig() Config {
 	}
 }
 
+// ResolvePath returns the config file path based on the provided path or environment defaults.
+func ResolvePath(path string) string {
+	if path != "" {
+		return path
+	}
+	if env := os.Getenv("BOPS_CONFIG"); env != "" {
+		return env
+	}
+	return "bops.json"
+}
+
 // Load reads config from a JSON file. Missing file falls back to defaults.
 func Load(path string) (Config, error) {
 	cfg := DefaultConfig()
 
-	if path == "" {
-		if env := os.Getenv("BOPS_CONFIG"); env != "" {
-			path = env
-		} else {
-			path = "bops.json"
-		}
-	}
+	path = ResolvePath(path)
 
 	file, err := os.Open(path)
 	if err != nil {
@@ -66,4 +72,19 @@ func Load(path string) (Config, error) {
 	}
 
 	return cfg, nil
+}
+
+// Save writes config to a JSON file using the resolved config path.
+func Save(path string, cfg Config) error {
+	path = ResolvePath(path)
+	if dir := filepath.Dir(path); dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, data, 0o644)
 }

@@ -161,12 +161,13 @@ func runServe(args []string) error {
 		return err
 	}
 
-	cfg, err := config.Load(*configPath)
+	resolvedPath := config.ResolvePath(*configPath)
+	cfg, err := config.Load(resolvedPath)
 	if err != nil {
 		return err
 	}
 
-	srv := server.New(cfg)
+	srv := server.New(cfg, resolvedPath)
 	fmt.Printf("bops server listening on %s\n", cfg.ServerListen)
 	return srv.ListenAndServe()
 }

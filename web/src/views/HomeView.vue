@@ -66,10 +66,15 @@
               沙箱验证
             </button>
           </div>
+          <div v-if="!aiConfigured" class="ai-config-warning">
+            未配置AI,无法使用,请
+            <button class="link-button" type="button" @click="goToSettings">设置</button>
+          </div>
           <textarea
             v-model="prompt"
             placeholder="描述需求，例如：在 web1/web2 上安装 nginx，渲染配置并启动服务"
             rows="4"
+            :disabled="!aiConfigured"
           ></textarea>
           <div v-if="showExamples" class="example-row">
             <button
@@ -86,7 +91,7 @@
             <button
               class="btn primary btn-sm"
               type="button"
-              :disabled="busy || !prompt.trim()"
+              :disabled="busy || !prompt.trim() || !aiConfigured"
               @click="startStream"
             >
               发送
@@ -643,6 +648,14 @@ type SummaryResponse = {
   needsReview?: boolean;
 };
 
+type AISettingsResponse = {
+  ai_provider?: string;
+  ai_api_key_set?: boolean;
+  ai_base_url?: string;
+  ai_model?: string;
+  configured?: boolean;
+};
+
 type HistoryEntry = {
   index: number;
   label: string;
@@ -691,6 +704,11 @@ const summary = ref<SummaryState>({
 const questionOverrides = ref<string[]>([]);
 const humanConfirmed = ref(false);
 const confirmReason = ref("");
+const aiConfig = ref({
+  configured: true,
+  provider: "",
+  apiKeySet: false
+});
 
 const validationEnvs = ref<ValidationEnvSummary[]>([]);
 const selectedValidationEnv = ref("");
@@ -752,6 +770,7 @@ const pendingQuestions = computed(() => {
   const issues = summary.value.issues.length ? summary.value.issues : validation.value.issues;
   return resolveQuestions(questionOverrides.value, issues, 6);
 });
+const aiConfigured = computed(() => aiConfig.value.configured);
 const syncBlocked = computed(() => !autoSync.value && (visualDirty.value || yamlDirty.value));
 const canShowIssues = computed(() => !syncBlocked.value);
 
@@ -791,6 +810,7 @@ watch(saveName, () => {
 onMounted(() => {
   loadValidationEnvs();
   loadEnvPackages();
+  loadAIConfig();
   void initChatSession();
 });
 
@@ -809,6 +829,25 @@ async function loadEnvPackages() {
     envPackageOptions.value = data.items || [];
   } catch (err) {
     envPackageOptions.value = [];
+  }
+}
+
+async function loadAIConfig() {
+  try {
+    const data = await request<AISettingsResponse>("/settings/ai");
+    aiConfig.value = {
+      configured: Boolean(
+        data.configured ?? (data.ai_provider && data.ai_api_key_set)
+      ),
+      provider: data.ai_provider || "",
+      apiKeySet: Boolean(data.ai_api_key_set)
+    };
+  } catch (err) {
+    aiConfig.value = {
+      configured: false,
+      provider: "",
+      apiKeySet: false
+    };
   }
 }
 
@@ -908,6 +947,10 @@ function formatSessionTime(value?: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "未知时间";
   return date.toLocaleString();
+}
+
+function goToSettings() {
+  void router.push("/settings");
 }
 
 function applyExample(text: string) {
@@ -2035,6 +2078,10 @@ function buildContext() {
 async function startStream() {
   const message = prompt.value.trim();
   if (!message) return;
+  if (!aiConfigured.value) {
+    streamError.value = "未配置AI,无法使用,请设置";
+    return;
+  }
   await ensureChatSession();
   pushChatEntry({ label: "用户", body: message, type: "user" });
   showExamples.value = false;
@@ -2674,6 +2721,27 @@ function diffSummary(prev: string, next: string) {
   display: flex;
   flex-direction: column;
   gap: 14px;
+}
+
+.ai-config-warning {
+  font-size: 12px;
+  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.link-button {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--info);
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.link-button:hover {
+  text-decoration: underline;
 }
 
 .pending-questions {
