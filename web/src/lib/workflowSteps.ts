@@ -22,6 +22,11 @@ export type StepSummary = {
   line?: number;
 };
 
+function getIndent(line: string) {
+  const match = line.match(/^(\s*)/);
+  return match ? match[1].length : 0;
+}
+
 export function parseSteps(content: string) {
   const lines = content.split(/\r?\n/);
   const steps: StepSummary[] = [];
@@ -131,7 +136,7 @@ export function parseSteps(content: string) {
     }
 
     if (inCmdBlock) {
-      const indent = line.match(/^(\s*)/)[1].length;
+      const indent = getIndent(line);
       if (line.trim() === "") {
         cmdLines.push("");
         continue;
@@ -146,7 +151,7 @@ export function parseSteps(content: string) {
     }
 
     if (inScriptBlock) {
-      const indent = line.match(/^(\s*)/)[1].length;
+      const indent = getIndent(line);
       if (line.trim() === "") {
         scriptLines.push("");
         continue;
@@ -161,7 +166,7 @@ export function parseSteps(content: string) {
     }
 
     if (inVarsBlock) {
-      const indent = line.match(/^(\s*)/)[1].length;
+      const indent = getIndent(line);
       if (line.trim() === "") {
         varsLines.push("");
         continue;
@@ -176,7 +181,7 @@ export function parseSteps(content: string) {
     }
 
     if (inTargets) {
-      const indent = line.match(/^(\s*)/)[1].length;
+      const indent = getIndent(line);
       if (line.trim() === "") {
         continue;
       }
@@ -193,7 +198,7 @@ export function parseSteps(content: string) {
     }
 
     if (inNames) {
-      const indent = line.match(/^(\s*)/)[1].length;
+      const indent = getIndent(line);
       if (line.trim() === "") {
         continue;
       }
@@ -219,7 +224,7 @@ export function parseSteps(content: string) {
 
     let handledWith = false;
     if (inWith) {
-      const indent = line.match(/^(\s*)/)[1].length;
+      const indent = getIndent(line);
       if (line.trim() === "") {
         handledWith = true;
       } else if (indent <= withIndent) {
@@ -258,7 +263,7 @@ export function parseSteps(content: string) {
             const value = cmdMatch[1].trim();
             if (value.startsWith("|") || value.startsWith(">")) {
               inCmdBlock = true;
-              cmdIndent = line.match(/^(\s*)/)[1].length + 2;
+              cmdIndent = getIndent(line) + 2;
               cmdLines = [];
             } else {
               current.cmd = stripQuotes(value);
@@ -305,7 +310,7 @@ export function parseSteps(content: string) {
             const value = scriptMatch[1].trim();
             if (value.startsWith("|") || value.startsWith(">")) {
               inScriptBlock = true;
-              scriptIndent = line.match(/^(\s*)/)[1].length + 2;
+              scriptIndent = getIndent(line) + 2;
               scriptLines = [];
             } else {
               current.script = stripQuotes(value);
@@ -316,7 +321,7 @@ export function parseSteps(content: string) {
             const value = varsMatch[1].trim();
             if (!value || value.startsWith("|") || value.startsWith(">")) {
               inVarsBlock = true;
-              varsIndent = line.match(/^(\s*)/)[1].length + 2;
+              varsIndent = getIndent(line) + 2;
               varsLines = [];
             } else {
               current.vars = stripQuotes(value);

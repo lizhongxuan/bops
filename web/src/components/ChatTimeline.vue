@@ -26,7 +26,7 @@
           :key="question"
           class="chip"
           type="button"
-          @click="$emit('suggestion', question)"
+          @click="emit('suggestion', question)"
         >
           {{ question }}
         </button>

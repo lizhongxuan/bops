@@ -16,7 +16,7 @@
         <label>工作流名称</label>
         <input
           :value="workflowName"
-          @input="$emit('update:workflowName', $event.target.value)"
+          @input="$emit('update:workflowName', readValue($event))"
           type="text"
           placeholder="例如 deploy-nginx"
         />
@@ -25,7 +25,7 @@
         <label>描述</label>
         <textarea
           :value="workflowDesc"
-          @input="$emit('update:workflowDesc', $event.target.value)"
+          @input="$emit('update:workflowDesc', readValue($event))"
           rows="2"
           placeholder="一句话说明这个流程"
         />
@@ -34,14 +34,14 @@
         <label>目标主机/分组</label>
         <input
           :value="targetsInput"
-          @input="$emit('update:targetsInput', $event.target.value)"
+          @input="$emit('update:targetsInput', readValue($event))"
           type="text"
           placeholder="web, db"
         />
       </div>
       <div class="field">
         <label>执行策略</label>
-        <select :value="planMode" @change="$emit('update:planMode', ($event.target as HTMLSelectElement).value)">
+        <select :value="planMode" @change="$emit('update:planMode', readValue($event))">
           <option value="manual-approve">manual-approve</option>
           <option value="auto">auto</option>
         </select>
@@ -50,7 +50,7 @@
         <label>环境变量包</label>
         <input
           :value="envPackagesInput"
-          @input="$emit('update:envPackagesInput', $event.target.value)"
+          @input="$emit('update:envPackagesInput', readValue($event))"
           type="text"
           placeholder="prod-env, staging"
         />
@@ -59,7 +59,7 @@
         <label>验证环境</label>
         <select
           :value="selectedValidationEnv"
-          @change="$emit('update:selectedValidationEnv', ($event.target as HTMLSelectElement).value)"
+          @change="$emit('update:selectedValidationEnv', readValue($event))"
         >
           <option value="">请选择验证环境</option>
           <option v-for="env in validationEnvs" :key="env.name" :value="env.name">
@@ -72,7 +72,7 @@
         <label>最大修复次数</label>
         <input
           :value="maxRetries"
-          @input="$emit('update:maxRetries', Number(($event.target as HTMLInputElement).value))"
+          @input="$emit('update:maxRetries', Number(readValue($event)))"
           type="number"
           min="0"
           max="5"
@@ -94,6 +94,11 @@
 
 <script setup lang="ts">
 import { PropType } from "vue";
+
+function readValue(event: Event) {
+  const target = event.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
+  return target?.value ?? "";
+}
 
 defineProps({
   workflowName: String,

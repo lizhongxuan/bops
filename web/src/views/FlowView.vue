@@ -106,7 +106,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from "vue";
-import { useRoute, useRouter } from "vue-router";
+import { useRoute } from "vue-router";
 import { ApiError, request } from "../lib/api";
 
 type Param = { key: string; value: string };
@@ -120,7 +120,6 @@ type FlowNode = {
 };
 
 const route = useRoute();
-const router = useRouter();
 const workflowName = computed(() => String(route.params.name || "workflow"));
 
 const yaml = ref(defaultYaml(workflowName.value));
@@ -132,8 +131,6 @@ const isSynced = ref(true);
 const loading = ref(false);
 const saving = ref(false);
 const runMessage = ref("");
-const runBusy = ref(false);
-const currentRunId = ref("");
 let skipNextSync = false;
 
 const activeNode = computed(() => nodes[selectedIndex.value]);
@@ -259,66 +256,16 @@ function applyYaml(content: string) {
   targetsInput.value = next[0] ? next[0].targets.join(", ") : "";
 }
 
-async function planRun() {
-  runBusy.value = true;
-  runMessage.value = "生成计划中...";
-  try {
-    await request(`/workflows/${workflowName.value}/plan`, { method: "POST" });
-    runMessage.value = "计划生成成功";
-  } catch (err) {
-    const apiErr = err as ApiError;
-    runMessage.value = apiErr.message ? `计划失败: ${apiErr.message}` : "计划失败，请检查服务是否启动";
-  } finally {
-    runBusy.value = false;
-  }
-}
-
-async function applyRun() {
-  runBusy.value = true;
-  runMessage.value = "正在执行...";
-  try {
-    const data = await request<{ run_id: string }>(`/workflows/${workflowName.value}/apply`, {
-      method: "POST"
-    });
-    currentRunId.value = data.run_id;
-    runMessage.value = "执行已开始，正在跳转运行控制台";
-    await router.push({
-      name: "run-console",
-      params: { id: data.run_id },
-      query: { workflow: workflowName.value }
-    });
-  } catch (err) {
-    const apiErr = err as ApiError;
-    runMessage.value = apiErr.message ? `执行失败: ${apiErr.message}` : "执行失败，请检查服务是否启动";
-  } finally {
-    runBusy.value = false;
-  }
-}
-
-async function stopRun() {
-  if (!currentRunId.value) {
-    runMessage.value = "暂无运行中的任务";
-    return;
-  }
-  runBusy.value = true;
-  runMessage.value = "正在停止...";
-  try {
-    await request(`/runs/${currentRunId.value}/stop`, { method: "POST" });
-    runMessage.value = "已发送停止指令";
-  } catch (err) {
-    const apiErr = err as ApiError;
-    runMessage.value = apiErr.message ? `停止失败: ${apiErr.message}` : "停止失败，请检查服务是否启动";
-  } finally {
-    runBusy.value = false;
-  }
-}
-
 function parseSteps(content: string): FlowNode[] {
   const lines = content.split(/\r?\n/);
   const steps: FlowNode[] = [];
   let current: FlowNode | null = null;
   let inWith = false;
   let withIndent = 0;
+  const getIndent = (line: string) => {
+    const match = line.match(/^(\s*)/);
+    return match ? match[1].length : 0;
+  };
 
   for (const line of lines) {
     const nameMatch = line.match(/^\s*-\s*name\s*:\s*(.+)$/);
@@ -359,7 +306,7 @@ function parseSteps(content: string): FlowNode[] {
     }
 
     if (inWith) {
-      const indent = line.match(/^(\s*)/)[1].length;
+      const indent = getIndent(line);
       if (indent <= withIndent) {
         inWith = false;
         continue;
@@ -399,7 +346,7 @@ function parseVars(content: string) {
       continue;
     }
     if (inVars) {
-      const indent = line.match(/^(\s*)/)[1].length;
+      const indent = line.match(/^(\s*)/)?.[1].length ?? 0;
       if (indent <= varsIndent) {
         inVars = false;
         continue;

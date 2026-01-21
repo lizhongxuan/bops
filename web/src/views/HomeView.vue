@@ -745,7 +745,6 @@ const workspaceTab = ref<"visual" | "yaml" | "validate">("visual");
 const visualYamlSource = computed(() => (autoSync.value ? yaml.value : visualYaml.value));
 const steps = computed<StepSummary[]>(() => parseSteps(visualYamlSource.value));
 const draftSteps = computed<DraftStep[]>(() => steps.value.map((step, index) => buildDraftStep(step, index)));
-const inventorySuggestions = computed(() => buildInventorySuggestions(yaml.value));
 const timelineEntries = computed(() => {
   return chatEntries.value;
 });
@@ -757,16 +756,6 @@ const requiresConfirm = computed(() => {
   return false;
 });
 const historyTimeline = computed<HistoryEntry[]>(() => buildHistoryTimeline());
-const draftTitle = computed(() => {
-  if (draftId.value) return `ai-${draftId.value.slice(0, 6)}`;
-  return "ai-draft";
-});
-const draftStatus = computed(() => {
-  if (draftId.value) return "已保存";
-  if (yaml.value.trim()) return "未保存";
-  return "未生成";
-});
-const confirmStatus = computed(() => (validation.value.ok ? "正常" : "需处理"));
 const canFix = computed(() => {
   if (!yaml.value.trim()) return false;
   return summary.value.issues.length > 0 || validation.value.issues.length > 0;
@@ -922,11 +911,6 @@ async function initChatSession() {
   await createChatSession();
 }
 
-function openSessionModal() {
-  showSessionModal.value = true;
-  void loadChatSessions();
-}
-
 function selectChatSession(id: string) {
   void restoreChatSession(id);
   showSessionModal.value = false;
@@ -962,6 +946,11 @@ function formatNode(node: string) {
   return node.replace(/_/g, " ");
 }
 
+function getIndent(line: string) {
+  const match = line.match(/^(\s*)/);
+  return match ? match[1].length : 0;
+}
+
 function formatTargetsForInput(value: string) {
   return value.replace(/[\[\]]/g, "").replace(/['"]/g, "").trim();
 }
@@ -984,92 +973,6 @@ function normalizeTargets(values: string[]) {
     unique.push(trimmed);
   }
   return unique;
-}
-
-function buildInventorySuggestions(content: string) {
-  const { groups, hosts } = parseInventoryTargets(content);
-  return normalizeTargets([...groups, ...hosts]);
-}
-
-function parseInventoryTargets(content: string) {
-  const lines = content.split(/\r?\n/);
-  const groups: string[] = [];
-  const hosts: string[] = [];
-  let inInventory = false;
-  let inventoryIndent = 0;
-  let inGroups = false;
-  let groupsIndent = 0;
-  let inHosts = false;
-  let hostsIndent = 0;
-
-  for (const line of lines) {
-    const inventoryMatch = line.match(/^(\s*)inventory\s*:\s*$/);
-    if (inventoryMatch) {
-      inInventory = true;
-      inventoryIndent = inventoryMatch[1].length;
-      inGroups = false;
-      inHosts = false;
-      continue;
-    }
-
-    if (!inInventory) continue;
-    if (line.trim() !== "") {
-      const indent = line.match(/^(\s*)/)[1].length;
-      if (indent <= inventoryIndent) {
-        inInventory = false;
-        inGroups = false;
-        inHosts = false;
-        continue;
-      }
-    }
-
-    const groupsMatch = line.match(/^(\s*)groups\s*:\s*$/);
-    if (groupsMatch && groupsMatch[1].length === inventoryIndent + 2) {
-      inGroups = true;
-      groupsIndent = groupsMatch[1].length;
-      inHosts = false;
-      continue;
-    }
-    const hostsMatch = line.match(/^(\s*)hosts\s*:\s*$/);
-    if (hostsMatch && hostsMatch[1].length === inventoryIndent + 2) {
-      inHosts = true;
-      hostsIndent = hostsMatch[1].length;
-      inGroups = false;
-      continue;
-    }
-
-    if (inGroups) {
-      if (line.trim() === "") continue;
-      const indent = line.match(/^(\s*)/)[1].length;
-      if (indent <= groupsIndent) {
-        inGroups = false;
-        continue;
-      }
-      if (indent === groupsIndent + 2) {
-        const nameMatch = line.match(/^\s*([a-zA-Z0-9_-]+)\s*:/);
-        if (nameMatch) {
-          groups.push(nameMatch[1]);
-        }
-      }
-    }
-
-    if (inHosts) {
-      if (line.trim() === "") continue;
-      const indent = line.match(/^(\s*)/)[1].length;
-      if (indent <= hostsIndent) {
-        inHosts = false;
-        continue;
-      }
-      if (indent === hostsIndent + 2) {
-        const nameMatch = line.match(/^\s*([a-zA-Z0-9_-]+)\s*:/);
-        if (nameMatch) {
-          hosts.push(nameMatch[1]);
-        }
-      }
-    }
-  }
-
-  return { groups, hosts };
 }
 
 function envMapToText(env?: Record<string, string>) {
@@ -1456,7 +1359,7 @@ function collectStepLines(lines: string[]) {
       continue;
     }
     if (inSteps) {
-      const indent = line.match(/^(\s*)/)[1].length;
+      const indent = getIndent(line);
       if (indent <= stepsIndent && line.trim() !== "") {
         inSteps = false;
         continue;
@@ -1472,7 +1375,7 @@ function collectStepLines(lines: string[]) {
 function findStepsSection(lines: string[]) {
   const startIndex = lines.findIndex((line) => /^\s*steps\s*:\s*$/.test(line));
   if (startIndex === -1) return null;
-  const sectionIndent = lines[startIndex].match(/^(\s*)/)[1].length;
+  const sectionIndent = getIndent(lines[startIndex]);
   let endIndex = startIndex + 1;
   while (endIndex < lines.length) {
     const line = lines[endIndex];
@@ -1480,7 +1383,7 @@ function findStepsSection(lines: string[]) {
       endIndex += 1;
       continue;
     }
-    const indent = line.match(/^(\s*)/)[1].length;
+    const indent = getIndent(line);
     if (indent <= sectionIndent && /^\s*[a-zA-Z0-9_-]+\s*:/i.test(line)) {
       break;
     }
@@ -1614,7 +1517,7 @@ function updateStepField(content: string, index: number, field: "name" | "action
           removeCount += 1;
           continue;
         }
-        const indent = line.match(/^(\s*)/)[1].length;
+        const indent = getIndent(line);
         if (indent <= propIndent.length) {
           break;
         }
@@ -1689,7 +1592,7 @@ function updateStepWithField(
       withEnd += 1;
       continue;
     }
-    const indent = line.match(/^(\s*)/)[1].length;
+    const indent = getIndent(line);
     if (indent <= withIndent) {
       break;
     }
@@ -1712,7 +1615,7 @@ function updateStepWithField(
         fieldEnd += 1;
         continue;
       }
-      const indent = line.match(/^(\s*)/)[1].length;
+      const indent = getIndent(line);
       if (indent <= fieldIndent.length) {
         break;
       }
@@ -1767,7 +1670,7 @@ function updateStepEnvBlock(content: string, index: number, env: Record<string, 
       withEnd += 1;
       continue;
     }
-    const indent = line.match(/^(\s*)/)[1].length;
+    const indent = getIndent(line);
     if (indent <= withIndent) {
       break;
     }
@@ -1794,7 +1697,7 @@ function updateStepEnvBlock(content: string, index: number, env: Record<string, 
         envEnd += 1;
         continue;
       }
-      const indent = line.match(/^(\s*)/)[1].length;
+      const indent = getIndent(line);
       if (indent <= envIndent.length) {
         break;
       }
@@ -1847,7 +1750,7 @@ function updateStepVarsBlock(content: string, index: number, rawVars: string) {
       withEnd += 1;
       continue;
     }
-    const indent = line.match(/^(\s*)/)[1].length;
+    const indent = getIndent(line);
     if (indent <= withIndent) {
       break;
     }
@@ -1874,7 +1777,7 @@ function updateStepVarsBlock(content: string, index: number, rawVars: string) {
         varsEnd += 1;
         continue;
       }
-      const indent = line.match(/^(\s*)/)[1].length;
+      const indent = getIndent(line);
       if (indent <= varsIndent.length) {
         break;
       }
@@ -2081,9 +1984,9 @@ function appendStep(action = "cmd.run") {
     setVisualYaml(`${trimmed}\n\nsteps:\n${indented}`);
     return;
   }
-  const stepsIndent = lines[stepsIndex].match(/^(\s*)/)[1].length;
+  const stepsIndent = getIndent(lines[stepsIndex]);
   if (/^\s*steps\s*:\s*\[\s*\]\s*$/.test(lines[stepsIndex])) {
-    const prefix = lines[stepsIndex].match(/^(\s*)/)[1];
+    const prefix = lines[stepsIndex].match(/^(\s*)/)?.[1] ?? "";
     lines[stepsIndex] = `${prefix}steps:`;
   }
   const stepIndent = " ".repeat(stepsIndent + 2);
@@ -2094,7 +1997,7 @@ function appendStep(action = "cmd.run") {
     if (line.trim() === "") {
       continue;
     }
-    const indent = line.match(/^(\s*)/)[1].length;
+    const indent = getIndent(line);
     if (indent <= stepsIndent) {
       insertAt = i;
       break;

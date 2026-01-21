@@ -1074,8 +1074,6 @@ const supportedActions = [
 ];
 
 const steps = computed(() => parseSteps(yaml.value));
-const hosts = computed(() => parseHosts(yaml.value));
-const vars = computed(() => parseVars(yaml.value));
 const inventoryGroups = computed(() => parseInventoryGroups(yaml.value));
 const inventoryHosts = computed(() => parseInventoryHosts(yaml.value));
 const unsupportedActions = computed(() => {
@@ -2175,7 +2173,7 @@ function updateStepField(content: string, index: number, field: "name" | "action
           removeCount += 1;
           continue;
         }
-        const indent = line.match(/^(\s*)/)[1].length;
+        const indent = getIndent(line);
         if (indent <= propIndent.length) {
           break;
         }
@@ -2240,7 +2238,7 @@ function updateStepWithField(
       withEnd += 1;
       continue;
     }
-    const indent = line.match(/^(\s*)/)[1].length;
+    const indent = getIndent(line);
     if (indent <= withIndent) {
       break;
     }
@@ -2263,7 +2261,7 @@ function updateStepWithField(
         fieldEnd += 1;
         continue;
       }
-      const indent = line.match(/^(\s*)/)[1].length;
+      const indent = getIndent(line);
       if (indent <= fieldIndent.length) {
         break;
       }
@@ -2369,7 +2367,7 @@ function updateStepEnvBlock(content: string, index: number, env: Record<string, 
       withEnd += 1;
       continue;
     }
-    const indent = line.match(/^(\s*)/)[1].length;
+    const indent = getIndent(line);
     if (indent <= withIndent) {
       break;
     }
@@ -2396,7 +2394,7 @@ function updateStepEnvBlock(content: string, index: number, env: Record<string, 
         envEnd += 1;
         continue;
       }
-      const indent = line.match(/^(\s*)/)[1].length;
+      const indent = getIndent(line);
       if (indent <= envIndent.length) {
         break;
       }
@@ -2439,7 +2437,7 @@ function getStepBlockByName(content: string, name: string) {
     }
   }
   if (start < 0) return "";
-  const baseIndent = lines[start].match(/^(\s*)/)[1].length;
+  const baseIndent = getIndent(lines[start]);
   let end = start + 1;
   while (end < lines.length) {
     const line = lines[end];
@@ -2447,7 +2445,7 @@ function getStepBlockByName(content: string, name: string) {
       end += 1;
       continue;
     }
-    const indent = line.match(/^(\s*)/)[1].length;
+    const indent = getIndent(line);
     if (indent <= baseIndent && /^\s*-\s*name\s*:/i.test(line)) {
       break;
     }
@@ -2539,10 +2537,15 @@ function trimBlock(block: string[]) {
   return next;
 }
 
+function getIndent(line: string) {
+  const match = line.match(/^(\s*)/);
+  return match ? match[1].length : 0;
+}
+
 function findStepsSection(lines: string[]) {
   const startIndex = lines.findIndex((line) => /^\s*steps\s*:\s*$/.test(line));
   if (startIndex === -1) return null;
-  const sectionIndent = lines[startIndex].match(/^(\s*)/)[1].length;
+  const sectionIndent = getIndent(lines[startIndex]);
   let endIndex = startIndex + 1;
   while (endIndex < lines.length) {
     const line = lines[endIndex];
@@ -2550,7 +2553,7 @@ function findStepsSection(lines: string[]) {
       endIndex += 1;
       continue;
     }
-    const indent = line.match(/^(\s*)/)[1].length;
+    const indent = getIndent(line);
     if (indent <= sectionIndent && /^\s*[a-zA-Z0-9_-]+\s*:/i.test(line)) {
       break;
     }
@@ -2710,7 +2713,7 @@ function findSectionKey(lines: string[], section: string, key: string) {
       continue;
     }
     if (inSection) {
-      const indent = line.match(/^(\\s*)/)[1].length;
+      const indent = getIndent(line);
       if (indent <= sectionIndent && line.trim() !== "") {
         inSection = false;
         continue;
@@ -2737,7 +2740,7 @@ function collectStepLines(lines: string[]) {
       continue;
     }
     if (inSteps) {
-      const indent = line.match(/^(\\s*)/)[1].length;
+      const indent = getIndent(line);
       if (indent <= stepsIndent && line.trim() !== "") {
         inSteps = false;
         continue;
@@ -2799,7 +2802,7 @@ function readInventoryGroups(content: string): InventoryGroupData[] {
     }
 
     if (inInventory) {
-      const indent = line.match(/^(\s*)/)[1].length;
+      const indent = getIndent(line);
       if (indent <= inventoryIndent && line.trim() !== "") {
         inInventory = false;
         inGroups = false;
@@ -2823,7 +2826,7 @@ function readInventoryGroups(content: string): InventoryGroupData[] {
     }
 
     if (inGroups) {
-      const indent = line.match(/^(\s*)/)[1].length;
+      const indent = getIndent(line);
       if (indent <= groupsIndent && line.trim() !== "") {
         inGroups = false;
         currentGroup = null;
@@ -2910,7 +2913,7 @@ function replaceInventoryGroups(content: string, groups: InventoryGroupData[]) {
     return next.join("\n").trimEnd() + "\n";
   }
 
-  const inventoryIndent = lines[inventoryIndex].match(/^(\s*)/)[1].length;
+  const inventoryIndent = getIndent(lines[inventoryIndex]);
   let inventoryEnd = inventoryIndex + 1;
   while (inventoryEnd < lines.length) {
     const line = lines[inventoryEnd];
@@ -2918,7 +2921,7 @@ function replaceInventoryGroups(content: string, groups: InventoryGroupData[]) {
       inventoryEnd += 1;
       continue;
     }
-    const indent = line.match(/^(\s*)/)[1].length;
+    const indent = getIndent(line);
     if (indent <= inventoryIndent && /^[a-zA-Z0-9_-]+\s*:/i.test(line)) {
       break;
     }
@@ -2952,7 +2955,7 @@ function replaceInventoryGroups(content: string, groups: InventoryGroupData[]) {
       groupsEnd += 1;
       continue;
     }
-    const indent = line.match(/^(\s*)/)[1].length;
+    const indent = getIndent(line);
     if (indent <= groupsIndent && line.trim() !== "") {
       break;
     }
@@ -2996,7 +2999,7 @@ function readInventoryHosts(content: string): InventoryHostData[] {
     }
 
     if (inInventory) {
-      const indent = line.match(/^(\s*)/)[1].length;
+      const indent = getIndent(line);
       if (indent <= inventoryIndent && line.trim() !== "") {
         inInventory = false;
         inHosts = false;
@@ -3018,7 +3021,7 @@ function readInventoryHosts(content: string): InventoryHostData[] {
     }
 
     if (inHosts) {
-      const indent = line.match(/^(\s*)/)[1].length;
+      const indent = getIndent(line);
       if (indent <= hostsIndent && line.trim() !== "") {
         inHosts = false;
         currentHost = null;
@@ -3084,7 +3087,7 @@ function replaceInventoryHosts(content: string, hosts: InventoryHostData[]) {
     return next.join("\n").trimEnd() + "\n";
   }
 
-  const inventoryIndent = lines[inventoryIndex].match(/^(\s*)/)[1].length;
+  const inventoryIndent = getIndent(lines[inventoryIndex]);
   let inventoryEnd = inventoryIndex + 1;
   while (inventoryEnd < lines.length) {
     const line = lines[inventoryEnd];
@@ -3092,7 +3095,7 @@ function replaceInventoryHosts(content: string, hosts: InventoryHostData[]) {
       inventoryEnd += 1;
       continue;
     }
-    const indent = line.match(/^(\s*)/)[1].length;
+    const indent = getIndent(line);
     if (indent <= inventoryIndent && /^[a-zA-Z0-9_-]+\s*:/i.test(line)) {
       break;
     }
@@ -3126,7 +3129,7 @@ function replaceInventoryHosts(content: string, hosts: InventoryHostData[]) {
       hostsEnd += 1;
       continue;
     }
-    const indent = line.match(/^(\s*)/)[1].length;
+    const indent = getIndent(line);
     if (indent <= hostsIndent && line.trim() !== "") {
       break;
     }
@@ -3139,64 +3142,6 @@ function replaceInventoryHosts(content: string, hosts: InventoryHostData[]) {
     ...lines.slice(hostsEnd)
   ];
   return next.join("\n").trimEnd() + "\n";
-}
-
-function parseHosts(content: string) {
-  const lines = content.split(/\r?\n/);
-  const hosts: string[] = [];
-  let inHosts = false;
-  let hostsIndent = 0;
-
-  for (const line of lines) {
-    const hostsMatch = line.match(/^(\s*)hosts\s*:\s*$/);
-    if (hostsMatch) {
-      inHosts = true;
-      hostsIndent = hostsMatch[1].length;
-      continue;
-    }
-    if (inHosts) {
-      const indent = line.match(/^(\s*)/)[1].length;
-      if (indent <= hostsIndent) {
-        inHosts = false;
-        continue;
-      }
-      const hostMatch = line.match(/^\s*([a-zA-Z0-9_-]+)\s*:\s*$/);
-      if (hostMatch) {
-        hosts.push(hostMatch[1]);
-      }
-    }
-  }
-
-  return Array.from(new Set(hosts));
-}
-
-function parseVars(content: string) {
-  const lines = content.split(/\r?\n/);
-  const vars: string[] = [];
-  let inVars = false;
-  let varsIndent = 0;
-
-  for (const line of lines) {
-    const varsMatch = line.match(/^(\s*)vars\s*:\s*$/);
-    if (varsMatch) {
-      inVars = true;
-      varsIndent = varsMatch[1].length;
-      continue;
-    }
-    if (inVars) {
-      const indent = line.match(/^(\s*)/)[1].length;
-      if (indent <= varsIndent) {
-        inVars = false;
-        continue;
-      }
-      const varMatch = line.match(/^\s*([a-zA-Z0-9_-]+)\s*:/);
-      if (varMatch) {
-        vars.push(varMatch[1]);
-      }
-    }
-  }
-
-  return Array.from(new Set(vars));
 }
 
 function parseEnvPackages(content: string) {
@@ -3213,7 +3158,7 @@ function parseEnvPackages(content: string) {
       continue;
     }
     if (inSection) {
-      const indent = line.match(/^(\s*)/)[1].length;
+      const indent = getIndent(line);
       if (indent <= sectionIndent && line.trim() !== "") {
         inSection = false;
         continue;

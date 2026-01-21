@@ -2,7 +2,7 @@
   <div class="step-detail">
     <div class="field">
       <label>步骤名称</label>
-      <input :value="step.name" @input="updateField('name', $event.target.value)" type="text" placeholder="例如：安装 nginx" />
+      <input :value="step.name" @input="updateField('name', readValue($event))" type="text" placeholder="例如：安装 nginx" />
     </div>
 
     <div class="field">
@@ -21,17 +21,17 @@
     <template v-if="step.action === 'cmd.run'">
       <div class="field">
         <label>命令</label>
-        <textarea :value="step.with.cmd" @input="updateWithField('cmd', $event.target.value)" rows="3" placeholder="echo hello" />
+        <textarea :value="step.with.cmd" @input="updateWithField('cmd', readValue($event))" rows="3" placeholder="echo hello" />
       </div>
       <div class="field">
         <label>工作目录</label>
-        <input :value="step.with.dir" @input="updateWithField('dir', $event.target.value)" type="text" placeholder="/opt/app" />
+        <input :value="step.with.dir" @input="updateWithField('dir', readValue($event))" type="text" placeholder="/opt/app" />
       </div>
       <div class="field">
         <label>环境变量 (KEY=VALUE 每行一条)</label>
         <textarea
           :value="step.with.envText"
-          @input="updateWithField('envText', $event.target.value)"
+          @input="updateWithField('envText', readValue($event))"
           rows="3"
           placeholder="TOKEN=abc123"
         />
@@ -43,7 +43,7 @@
         <label>包名</label>
         <input
           :value="step.with.packages"
-          @input="updateWithField('packages', $event.target.value)"
+          @input="updateWithField('packages', readValue($event))"
           type="text"
           placeholder="nginx, curl"
         />
@@ -53,17 +53,17 @@
     <template v-else-if="step.action === 'template.render'">
       <div class="field">
         <label>模板路径</label>
-        <input :value="step.with.src" @input="updateWithField('src', $event.target.value)" type="text" placeholder="nginx.conf.j2" />
+        <input :value="step.with.src" @input="updateWithField('src', readValue($event))" type="text" placeholder="nginx.conf.j2" />
       </div>
       <div class="field">
         <label>输出路径</label>
-        <input :value="step.with.dest" @input="updateWithField('dest', $event.target.value)" type="text" placeholder="/etc/nginx/nginx.conf" />
+        <input :value="step.with.dest" @input="updateWithField('dest', readValue($event))" type="text" placeholder="/etc/nginx/nginx.conf" />
       </div>
       <div class="field">
         <label>模板变量 (YAML/JSON)</label>
         <textarea
           :value="step.with.vars"
-          @input="updateWithField('vars', $event.target.value)"
+          @input="updateWithField('vars', readValue($event))"
           rows="3"
           placeholder="key: value"
         />
@@ -73,11 +73,11 @@
     <template v-else-if="step.action === 'service.ensure'">
       <div class="field">
         <label>服务名</label>
-        <input :value="step.with.name" @input="updateWithField('name', $event.target.value)" type="text" placeholder="nginx" />
+        <input :value="step.with.name" @input="updateWithField('name', readValue($event))" type="text" placeholder="nginx" />
       </div>
       <div class="field">
         <label>状态</label>
-        <select :value="step.with.state" @change="updateWithField('state', $event.target.value)">
+        <select :value="step.with.state" @change="updateWithField('state', readValue($event))">
           <option value="started">started</option>
           <option value="stopped">stopped</option>
         </select>
@@ -89,7 +89,7 @@
         <label>脚本库引用</label>
         <input
           :value="step.with.scriptRef"
-          @input="updateWithField('scriptRef', $event.target.value)"
+          @input="updateWithField('scriptRef', readValue($event))"
           type="text"
           placeholder="install-nginx"
         />
@@ -98,7 +98,7 @@
         <label>脚本内容</label>
         <textarea
           :value="step.with.script"
-          @input="updateWithField('script', $event.target.value)"
+          @input="updateWithField('script', readValue($event))"
           rows="4"
           placeholder="#!/bin/sh"
         />
@@ -110,7 +110,7 @@
         <label>环境变量 (KEY=VALUE 每行一条)</label>
         <textarea
           :value="step.with.envText"
-          @input="updateWithField('envText', $event.target.value)"
+          @input="updateWithField('envText', readValue($event))"
           rows="4"
           placeholder="TOKEN=abc123"
         />
@@ -153,6 +153,11 @@ function updateWithField(field: keyof DraftStep["with"], value: string) {
       [field]: value
     }
   });
+}
+
+function readValue(event: Event) {
+  const target = event.target as HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | null;
+  return target?.value ?? "";
 }
 
 function handleActionChange(event: Event) {

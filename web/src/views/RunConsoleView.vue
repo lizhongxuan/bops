@@ -364,7 +364,7 @@ function parseWorkflowSteps(content: string) {
       continue;
     }
     if (inSteps) {
-      const indent = line.match(/^(\s*)/)[1].length;
+      const indent = line.match(/^(\s*)/)?.[1].length ?? 0;
       if (indent <= stepsIndent && line.trim() !== "") {
         inSteps = false;
         continue;
