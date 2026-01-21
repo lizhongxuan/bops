@@ -42,6 +42,7 @@
 - `POST /api/ai/chat/sessions/{id}/messages` 追加消息并返回 AI 回复
 - `POST /api/ai/workflow/generate` 只生成 YAML (无需聊天)
 - `POST /api/ai/workflow/fix` 根据报错修复 YAML
+- `POST /api/ai/workflow/stream` SSE 流式生成/修复 (推荐用于首页 AI 助手)
 
 示例请求 (generate):
 ```json
@@ -58,6 +59,20 @@
 ```json
 {
   "yaml": "version: v0.1\\nname: deploy-nginx\\n..."
+}
+```
+
+流式 result payload (event: result):
+```json
+{
+  "yaml": "version: v0.1\\nname: deploy-nginx\\n...",
+  "summary": "steps=3 risk=low issues=0",
+  "issues": [],
+  "risk_level": "low",
+  "needs_review": false,
+  "questions": ["Which hosts should this run on?"],
+  "history": [],
+  "draft_id": "draft-123"
 }
 ```
 

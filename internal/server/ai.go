@@ -603,6 +603,7 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 				"issues":       result.state.Issues,
 				"risk_level":   result.state.RiskLevel,
 				"needs_review": result.state.NeedsReview,
+				"questions":    result.state.Questions,
 				"history":      result.state.History,
 				"draft_id":     draftID,
 			}

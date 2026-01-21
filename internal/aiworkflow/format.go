@@ -1,12 +1,10 @@
 package aiworkflow
 
 import (
-	"encoding/json"
 	"errors"
 	"strings"
 
 	"bops/internal/ai"
-	"gopkg.in/yaml.v3"
 )
 
 func buildGeneratePrompt(prompt, contextText string) string {
@@ -19,14 +17,25 @@ func buildGeneratePrompt(prompt, contextText string) string {
 	builder.WriteString("User request:\n")
 	builder.WriteString(prompt)
 	builder.WriteString("\n\n")
-	builder.WriteString("Return JSON only. Top-level keys: version, name, description, inventory, vars (optional), env_packages (optional), plan, steps, handlers (optional), tests (optional).\n")
+	builder.WriteString("Return JSON only with top-level keys: workflow, questions.\n")
+	builder.WriteString("workflow must include: version, name, description, inventory, plan, steps.\n")
+	builder.WriteString("Steps must include name/action/with and must not include targets.\n")
+	builder.WriteString("Allowed actions: ")
+	builder.WriteString(allowedActionText())
+	builder.WriteString(".\n")
+	builder.WriteString("If information is missing, keep steps minimal and put questions in questions[].\n")
 	builder.WriteString("Do not include markdown or explanations.")
 	return builder.String()
 }
 
 func buildFixPrompt(yamlText string, issues []string, lastError string) string {
 	builder := strings.Builder{}
-	builder.WriteString("Fix the YAML below and return JSON only with the same schema.\n\n")
+	builder.WriteString("Fix the YAML below and return JSON only with top-level keys: workflow, questions.\n")
+	builder.WriteString("workflow must include: version, name, description, inventory, plan, steps.\n")
+	builder.WriteString("Steps must include name/action/with and must not include targets.\n")
+	builder.WriteString("Allowed actions: ")
+	builder.WriteString(allowedActionText())
+	builder.WriteString(".\n\n")
 	builder.WriteString("YAML:\n")
 	builder.WriteString(yamlText)
 	builder.WriteString("\n\n")
@@ -47,24 +56,25 @@ func buildFixPrompt(yamlText string, issues []string, lastError string) string {
 	return builder.String()
 }
 
-func extractWorkflowYAML(reply string) (string, error) {
+func extractWorkflowYAML(reply string) (string, []string, error) {
 	trimmed := strings.TrimSpace(reply)
 	if trimmed == "" {
-		return "", errors.New("empty ai response")
+		return "", nil, errors.New("empty ai response")
 	}
 	if jsonText := extractJSONBlock(trimmed); jsonText != "" {
-		var payload any
-		if err := json.Unmarshal([]byte(jsonText), &payload); err == nil {
-			if out, err := yaml.Marshal(payload); err == nil {
-				return strings.TrimSpace(string(out)), nil
+		workflowPayload, questions, err := parseWorkflowJSON(jsonText)
+		if err == nil {
+			workflowPayload = normalizeWorkflow(workflowPayload)
+			if out, err := marshalWorkflowYAML(workflowPayload); err == nil {
+				return out, questions, nil
 			}
 		}
 	}
 	fallback := strings.TrimSpace(ai.ExtractYAML(trimmed))
 	if fallback == "" {
-		return "", errors.New("unable to extract yaml")
+		return "", nil, errors.New("unable to extract yaml")
 	}
-	return fallback, nil
+	return normalizeWorkflowYAML(fallback), nil, nil
 }
 
 func extractJSONBlock(text string) string {

@@ -560,6 +560,7 @@ import { computed, nextTick, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ApiError, apiBase, request } from "../lib/api";
 import StepDetailForm from "../components/StepDetailForm.vue";
+import { normalizeQuestions, resolveQuestions } from "../lib/ai-questions";
 import { createDefaultStepWith, type DraftStep } from "../lib/draft";
 import { parseSteps, type StepSummary } from "../lib/workflowSteps";
 
@@ -687,6 +688,7 @@ const summary = ref<SummaryState>({
   issues: [],
   needsReview: false
 });
+const questionOverrides = ref<string[]>([]);
 const humanConfirmed = ref(false);
 const confirmReason = ref("");
 
@@ -748,8 +750,7 @@ const canFix = computed(() => {
 });
 const pendingQuestions = computed(() => {
   const issues = summary.value.issues.length ? summary.value.issues : validation.value.issues;
-  const unique = Array.from(new Set(issues.filter((item) => item && item.trim())));
-  return unique.slice(0, 6);
+  return resolveQuestions(questionOverrides.value, issues, 6);
 });
 const syncBlocked = computed(() => !autoSync.value && (visualDirty.value || yamlDirty.value));
 const canShowIssues = computed(() => !syncBlocked.value);
@@ -914,9 +915,11 @@ function applyExample(text: string) {
   showExamples.value = false;
 }
 
-function applySuggestion(text: string) {
+async function applySuggestion(text: string) {
   const trimmed = prompt.value.trim();
   prompt.value = trimmed ? `${trimmed}\n${text}` : text;
+  if (busy.value) return;
+  await startStream();
 }
 
 function toggleExamples() {
@@ -2035,6 +2038,7 @@ async function startStream() {
   await ensureChatSession();
   pushChatEntry({ label: "用户", body: message, type: "user" });
   showExamples.value = false;
+  questionOverrides.value = [];
   void sendChatMessage(message);
   busy.value = true;
   streamError.value = "";
@@ -2138,6 +2142,7 @@ function applyResult(payload: Record<string, unknown>) {
   if (nextYaml) {
     yaml.value = stripTargetsFromYaml(nextYaml);
   }
+  questionOverrides.value = normalizeQuestions(payload.questions);
   if (typeof payload.summary === "string") {
     summary.value.summary = payload.summary;
   }

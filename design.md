@@ -1,113 +1,169 @@
-# 智能运维引擎工作流设计 (简化可视化编排版)
+# 设计方案：对话生成工作流步骤（首页 AI 助手 + Eino）
 
-本设计以“低门槛、高效率”为目标，将工作流编排页简化为可视化步骤列表。默认只暴露必须信息 (环境变量与主机)，其他复杂配置逐层折叠或隐藏在高级面板。
+## 背景
+首页 AI 助手已经通过 `/api/ai/workflow/stream` 进行流式生成，并使用 Eino 图执行流程（`internal/aiworkflow/pipeline.go`）。目标是让对话直接产出具体的步骤，同时形成“澄清 -> 生成 -> 校验 -> 修复”的闭环。
 
-## 1. 目标与原则
-- 低门槛: 新手不需要写 YAML 即可完成脚本/命令型工作流。
-- 渐进呈现: 先展示最少字段，更多能力在“高级配置/高级编辑器”中展开。
-- 线性执行: 工作流保持顺序步骤模型，每一步对目标主机并发完成后再进入下一步。
-- 可视化为主: 以步骤卡片为核心，避免让用户直接面对 YAML。
-- 一键运行: plan/apply 仅在工作流编排页提供，失败信息清晰定位到步骤。
+本文给出一套与现有 Eino 架构对齐的最小方案：在必要时主动追问，再生成完整 YAML（非仅步骤）。
 
-## 2. 页面结构 (工作流编排页)
-### 2.1 顶部区域 (全局信息)
-- 工作流名称、描述。
-- 运行环境变量包 (env_packages) 显式选择 (可选)。
-- 主机/分组管理入口 (Inventory 管理弹窗)。
-- 高级编辑器入口 (折叠的 YAML 面板，默认隐藏)。
+## 目标
+- 将自由对话转换为结构化、可执行的步骤。
+- 在缺失关键信息时先追问再生成，避免不完整/不安全的草稿。
+- 输出完整 YAML（version、name、description、inventory、plan、steps）。
+- 流式推送进度，保持聊天与草稿同步。
 
-### 2.2 中心区域 (步骤列表)
-- 列表式步骤卡片，支持拖拽排序。
-- 每个步骤卡片包含:
-  - 步骤名称
-  - 目标主机/分组
-  - 动作类型 (基础动作优先)
-  - 动作参数 (由动作类型决定)
-  - 高级配置折叠区 (默认收起)
-- 列表底部提供“新增步骤”按钮。
+## 非目标
+- 不新增与现有首页行为冲突的 UI 规范。
+- 不引入新的执行引擎或工作流 schema 变更。
 
-### 2.3 右侧/底部区域 (辅助信息)
-- 结构预览 (可选开关)。
-- 错误与校验提示 (按步骤显示)。
-- YAML 预览 (只读，默认隐藏)。
+## 用户流程（首页 AI 助手）
+1) 用户输入目标需求。
+2) 助手提取意图并识别缺失信息。
+3) 缺失信息存在则提问。
+4) 用户补充后重新生成步骤并更新 YAML 草稿。
+5) 校验 -> 修复 -> 总结 -> 可选沙箱执行。
+6) 用户保存为工作流。
 
-## 3. 动作类型与可视化配置
-### 3.1 基础动作 (默认展示)
-- cmd.run: 执行命令
-  - 字段: cmd (输入框/多行), dir (可选), env (默认隐藏，可展开)
-- script.shell: 运行 shell 脚本
-  - 字段: script (多行文本) 或 script_ref (脚本库选择，二选一)
-  - args (可选), env (默认隐藏，可展开), dir (可选)
-- script.python: 运行 python 脚本
-  - 字段: script (多行文本) 或 script_ref (脚本库选择，二选一)
-  - args (可选), env (默认隐藏，可展开), dir (可选)
+## 输出结构（YAML 合同）
+必须输出完整 YAML（非仅 steps）：
 
-说明: 如果用户只使用 cmd.run 与 script.*，仅需基础表单即可完成编排。
-
-### 3.2 高级动作 (折叠显示)
-- template.render
-- pkg.install
-- service.ensure / service.restart
-- env.set (可用于设置后续步骤依赖的运行期变量)
-
-## 4. 步骤卡片设计
-每个步骤卡片分为四块:
-1) 标题区: 序号 + 步骤名 + 状态提示
-2) 目标区: 选择 host/group, 支持多选
-3) 动作区: 动作类型选择 + 参数表单
-4) 高级区 (折叠): when / retries / timeout / loop / notify / env (默认隐藏，可按钮展开)
-
-交互细节:
-- 步骤间拖拽重排。
-- 复制/删除步骤。
-- 一键转换为“高级动作”。
-- 表单出错时高亮字段，不阻止用户继续编辑。
-
-## 5. YAML 与可视化的映射
-### 5.1 映射原则
-- UI 表单是主视图，YAML 仅作高级编辑与导出。
-- YAML 修改后可同步回 UI (若包含 UI 未支持字段，提示并引导用户去原来的 YAML 编辑器修改)。
-
-### 5.2 示例映射
-UI 表单 (cmd.run):
-- step.name = "check disk"
-- step.targets = ["web"]
-- step.action = "cmd.run"
-- step.with.cmd = "df -h"
-
-对应 YAML:
 ```yaml
-- name: check disk
-  targets: [web]
-  action: cmd.run
-  with:
-    cmd: "df -h"
+version: v0.1
+name: <slug>
+description: <text>
+inventory:
+  hosts:
+    local:
+      address: 127.0.0.1
+plan:
+  mode: manual-approve
+  strategy: sequential
+env_packages: []        # 可选
+vars: {}                # 可选
+steps:
+  - name: ...
+    action: ...
+    with:
+      ...
 ```
 
-## 6. 主机与环境变量
-### 6.1 主机管理
-- 主机/分组独立管理弹窗 (必须支持分组)。
-- 支持 IP、地址、分组、主机变量。
-- 在步骤中以“目标选择器”引用。
+步骤规则：
+- 必须包含 `name`、`action`、`with`。
+- 步骤内避免 `targets`（目标在校验/执行时解析）。
+- 仅允许动作白名单：`cmd.run`、`pkg.install`、`template.render`、
+  `service.ensure`、`script.shell`、`script.python`、`env.set`。
 
-### 6.2 环境变量
-- 全局 env_packages 显式选择 (运行时注入)。
-- 步骤级 env 覆盖 (默认隐藏，按钮展开查看)。
-- env.set 提供可视化表单 (键值对)。
+## Eino 图设计
+保留现有图结构，补充“澄清节点”：
 
-## 7. 执行与反馈
-- Plan/Apply 按钮只放在工作流编排页顶部 (不分散在其它页面)。
-- 运行控制台显示完整步骤列表与状态 (成功/失败/排队)。
-- 失败提示回链到对应步骤卡片。
-- 默认策略: 任一主机失败即终止后续步骤。
+```
+normalize -> intent_extract -> question_gate -> generate -> validate
+    -> (fix loop if issues) -> safety -> execute -> summarize -> human_gate
+```
 
-## 8. 兼容高级模式
-- 高级编辑器内可直接编辑 YAML。
-- YAML 中包含 UI 未支持动作时:
-  - UI 显示提示
-  - 引导用户到原来的 YAML 编辑器进行文本修改
+### 节点职责
+- `normalize`：
+  - 清理输入、应用默认值（plan mode、max retries）。
+- `intent_extract`（LLM 或轻量解析）：
+  - 构建结构化意图：
+    - `goal`、`targets`（可选）、`constraints`、`resources`、`actions`。
+  - 识别缺失字段 `missing[]`。
+- `question_gate`：
+  - 若 `missing[]` 非空，输出问题并短路生成。
+  - 否则进入 `generate`。
+- `generate`：
+  - 输出包含 `workflow` 的 JSON（见下文）。
+- `validate`：
+  - 复用现有 YAML 校验并收集 issues。
+- `fix`：
+  - 复用现有修复提示词修正 YAML。
+- `summarize` + `human_gate`：
+  - 沿用风险评估与人工确认逻辑。
 
-## 9. 渐进优化方向
-- 模板库/脚本库快捷插入。
-- 步骤模板市场 (一键插入常用运维步骤)。
-- AI 对话生成步骤后自动填充列表。
+## LLM 输出合同
+为避免污染 YAML，要求返回 wrapper JSON：
+
+```json
+{
+  "workflow": {
+    "version": "v0.1",
+    "name": "deploy-nginx",
+    "description": "install nginx and start service",
+    "inventory": { "hosts": { "local": { "address": "127.0.0.1" } } },
+    "plan": { "mode": "manual-approve", "strategy": "sequential" },
+    "steps": [
+      { "name": "install nginx", "action": "pkg.install", "with": { "name": "nginx" } }
+    ]
+  },
+  "questions": [
+    "Which hosts should this run on?",
+    "Do you need a custom config file path?"
+  ]
+}
+```
+
+实现要点：
+- `extractWorkflowYAML()` 优先解析 `workflow`。
+- 将 `questions[]` 暴露到 stream 结果，供前端显示。
+
+## Prompt 策略
+System prompt 要求：
+- 仅返回 JSON；不确定时将问题写入 `questions[]`。
+- 强制 schema + 动作白名单。
+- 不允许 markdown 和额外字段（仅 `workflow`、`questions`）。
+
+用户 prompt 模板（后端生成）：
+```
+Context:
+- env packages: [...]
+- validation env: ...
+- plan mode: ...
+
+User request:
+<user message>
+
+Return JSON only with keys: workflow, questions.
+```
+
+## API / Streaming 行为
+扩展 stream 结果包含问题：
+```json
+{
+  "yaml": "...",
+  "issues": ["..."],
+  "risk_level": "low",
+  "questions": ["..."],
+  "history": ["..."],
+  "draft_id": "..."
+}
+```
+
+前端行为：
+- `questions[]` 存在时展示 chips。
+- 点击 chips 追加到输入框并重新生成。
+
+## 数据/状态变更
+后端：
+- `State` 增加 `Questions []string`。
+- `generate` 节点写入 `Questions`。
+- `stream` 输出 `questions`。
+
+前端：
+- `applyResult()` 将 `questions` 写入 `pendingQuestions`。
+- 校验 issues 作为 fallback 的 questions。
+
+## 安全与约束
+- 高风险动作强制 `plan.mode=manual-approve`。
+- 步骤数量上限（如 20），超限要求确认。
+- 不输出 `targets`。
+- 禁止破坏性动作，除非用户明确提出（如 `rm -rf`、`shutdown`）。
+
+## 上线步骤
+1) 生成与解析支持 wrapper JSON。
+2) stream 输出 questions。
+3) 前端展示 questions chips。
+4) 观察失败案例并优化提示词与风险规则。
+
+## 待确认问题
+- 问题应在生成前完全澄清，还是允许“先出草稿再提问”？
+- 是否需要区分 “plan” / “apply” 两类 prompt？
+- 如何在不全量重写 YAML 的情况下合并新答案？

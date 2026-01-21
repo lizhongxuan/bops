@@ -89,6 +89,12 @@ func (p *Pipeline) buildGenerateGraph() (compose.Runnable[*State, *State], error
 	if err := graph.AddLambdaNode("normalize", compose.InvokableLambda(p.inputNormalize)); err != nil {
 		return nil, err
 	}
+	if err := graph.AddLambdaNode("intent_extract", compose.InvokableLambda(p.intentExtract)); err != nil {
+		return nil, err
+	}
+	if err := graph.AddLambdaNode("question_gate", compose.InvokableLambda(p.questionGate)); err != nil {
+		return nil, err
+	}
 	if err := graph.AddLambdaNode("generator", compose.InvokableLambda(p.generate)); err != nil {
 		return nil, err
 	}
@@ -114,9 +120,26 @@ func (p *Pipeline) buildGenerateGraph() (compose.Runnable[*State, *State], error
 	if err := graph.AddEdge(compose.START, "normalize"); err != nil {
 		return nil, err
 	}
-	if err := graph.AddEdge("normalize", "generator"); err != nil {
+	if err := graph.AddEdge("normalize", "intent_extract"); err != nil {
 		return nil, err
 	}
+	if err := graph.AddEdge("intent_extract", "question_gate"); err != nil {
+		return nil, err
+	}
+
+	questionBranch := compose.NewGraphBranch(func(ctx context.Context, state *State) (string, error) {
+		if len(state.Questions) > 0 {
+			return "summarizer", nil
+		}
+		return "generator", nil
+	}, map[string]bool{
+		"generator":  true,
+		"summarizer": true,
+	})
+	if err := graph.AddBranch("question_gate", questionBranch); err != nil {
+		return nil, err
+	}
+
 	if err := graph.AddEdge("generator", "validator"); err != nil {
 		return nil, err
 	}

@@ -35,6 +35,8 @@ type State struct {
 	ContextText      string
 	SystemPrompt     string
 	YAML             string
+	Questions        []string
+	Intent           *Intent
 	Issues           []string
 	RiskLevel        RiskLevel
 	RiskNotes        []string

@@ -61,12 +61,13 @@ func (p *Pipeline) generate(ctx context.Context, state *State) (*State, error) {
 		emitEvent(state, "generator", "error", err.Error())
 		return state, err
 	}
-	yamlText, err := extractWorkflowYAML(reply)
+	yamlText, questions, err := extractWorkflowYAML(reply)
 	if err != nil {
 		emitEvent(state, "generator", "error", err.Error())
 		return state, err
 	}
 	state.YAML = yamlText
+	state.Questions = mergeQuestions(state.Questions, questions)
 	emitEvent(state, "generator", "done", "")
 	return state, nil
 }
@@ -96,7 +97,7 @@ func (p *Pipeline) fix(ctx context.Context, state *State) (*State, error) {
 		emitEvent(state, "fixer", "error", err.Error())
 		return state, err
 	}
-	yamlText, err := extractWorkflowYAML(reply)
+	yamlText, questions, err := extractWorkflowYAML(reply)
 	if err != nil {
 		emitEvent(state, "fixer", "error", err.Error())
 		return state, err
@@ -105,6 +106,7 @@ func (p *Pipeline) fix(ctx context.Context, state *State) (*State, error) {
 		state.History = append(state.History, state.YAML)
 		state.YAML = yamlText
 	}
+	state.Questions = mergeQuestions(state.Questions, questions)
 	state.RetryCount++
 	emitEvent(state, "fixer", "done", "")
 	return state, nil
@@ -126,12 +128,17 @@ func (p *Pipeline) validate(_ context.Context, state *State) (*State, error) {
 		emitEvent(state, "validator", "error", err.Error())
 		return state, nil
 	}
+	var issues []string
 	if err := wf.Validate(); err != nil {
 		if vErr, ok := err.(*workflow.ValidationError); ok {
-			state.Issues = vErr.Issues
+			issues = append(issues, vErr.Issues...)
 		} else {
-			state.Issues = []string{err.Error()}
+			issues = append(issues, err.Error())
 		}
+	}
+	issues = append(issues, guardrailIssues(wf, trimmed)...)
+	if len(issues) > 0 {
+		state.Issues = dedupeStrings(issues)
 		state.IsSuccess = false
 		emitEvent(state, "validator", "error", "validation failed")
 		return state, nil
@@ -148,6 +155,9 @@ func (p *Pipeline) safetyCheck(_ context.Context, state *State) (*State, error) 
 	state.RiskNotes = notes
 	if state.RiskLevel == RiskLevelHigh {
 		state.SkipExecute = true
+		if updated, err := forceManualApprove(state.YAML); err == nil && strings.TrimSpace(updated) != "" {
+			state.YAML = updated
+		}
 	}
 	emitEvent(state, "safety", "done", fmt.Sprintf("risk=%s", state.RiskLevel))
 	return state, nil
