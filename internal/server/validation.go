@@ -42,13 +42,13 @@ type validationRunResponse struct {
 
 func (s *Server) handleValidationEnvs(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		writeError(w, r, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
 	items, err := s.validationStore.List()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -71,7 +71,7 @@ func (s *Server) handleValidationEnv(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/validation-envs/")
 	name := strings.Trim(path, "/")
 	if name == "" {
-		writeError(w, http.StatusNotFound, "validation env name is required")
+		writeError(w, r, http.StatusNotFound, "validation env name is required")
 		return
 	}
 
@@ -79,19 +79,19 @@ func (s *Server) handleValidationEnv(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		env, _, err := s.validationStore.Get(name)
 		if err != nil {
-			writeError(w, http.StatusNotFound, err.Error())
+			writeError(w, r, http.StatusNotFound, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, env)
 	case http.MethodPut:
 		body, err := readBody(r)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
 		var req validationEnvRequest
 		if err := json.Unmarshal(body, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid json payload")
+			writeError(w, r, http.StatusBadRequest, "invalid json payload")
 			return
 		}
 		if strings.TrimSpace(req.Name) == "" {
@@ -109,59 +109,59 @@ func (s *Server) handleValidationEnv(w http.ResponseWriter, r *http.Request) {
 			AgentAddress: req.AgentAddress,
 		})
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, env)
 	case http.MethodDelete:
 		if err := s.validationStore.Delete(name); err != nil {
-			writeError(w, http.StatusNotFound, err.Error())
+			writeError(w, r, http.StatusNotFound, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	default:
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		writeError(w, r, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
 func (s *Server) handleValidationRun(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		writeError(w, r, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
 	body, err := readBody(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 	var req validationRunRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json payload")
+		writeError(w, r, http.StatusBadRequest, "invalid json payload")
 		return
 	}
 	if strings.TrimSpace(req.Env) == "" {
-		writeError(w, http.StatusBadRequest, "env is required")
+		writeError(w, r, http.StatusBadRequest, "env is required")
 		return
 	}
 	if strings.TrimSpace(req.YAML) == "" {
-		writeError(w, http.StatusBadRequest, "yaml is required")
+		writeError(w, r, http.StatusBadRequest, "yaml is required")
 		return
 	}
 
 	wf, err := workflow.Load([]byte(req.YAML))
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := wf.Validate(); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	env, _, err := s.validationStore.Get(req.Env)
 	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		writeError(w, r, http.StatusNotFound, err.Error())
 		return
 	}
 

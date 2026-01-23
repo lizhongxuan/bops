@@ -16,11 +16,13 @@ import (
 	"bops/internal/engine"
 	"bops/internal/envstore"
 	"bops/internal/eventbus"
+	"bops/internal/logging"
 	"bops/internal/runmanager"
 	"bops/internal/scriptstore"
 	"bops/internal/state"
 	"bops/internal/validationenv"
 	"bops/internal/workflowstore"
+	"go.uber.org/zap"
 )
 
 type Server struct {
@@ -69,6 +71,14 @@ func New(cfg config.Config, configPath string) *Server {
 			MaxRetries:   2,
 		})
 	}
+	logging.L().Debug("server init",
+		zap.String("listen", cfg.ServerListen),
+		zap.String("static_dir", cfg.StaticDir),
+		zap.String("data_dir", cfg.DataDir),
+		zap.String("state_path", cfg.StatePath),
+		zap.Bool("ai_enabled", aiClient != nil),
+		zap.String("config_path", configPath),
+	)
 	srv := &Server{
 		Addr:            cfg.ServerListen,
 		StaticDir:       cfg.StaticDir,
@@ -98,10 +108,11 @@ func (s *Server) ListenAndServe() error {
 	if s.http == nil {
 		s.http = &http.Server{
 			Addr:              s.Addr,
-			Handler:           s.withCORS(s.mux),
+			Handler:           s.withCORS(s.withLogging(s.mux)),
 			ReadHeaderTimeout: 5 * time.Second,
 		}
 	}
+	logging.L().Info("http server listening", zap.String("addr", s.Addr))
 	return s.http.ListenAndServe()
 }
 
@@ -109,6 +120,7 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.http == nil {
 		return nil
 	}
+	logging.L().Info("http server shutting down")
 	return s.http.Shutdown(ctx)
 }
 
@@ -137,6 +149,56 @@ func (s *Server) withCORS(next http.Handler) http.Handler {
 		}
 
 		next.ServeHTTP(w, r)
+	})
+}
+
+type responseRecorder struct {
+	http.ResponseWriter
+	status int
+	bytes  int
+}
+
+func (r *responseRecorder) WriteHeader(status int) {
+	r.status = status
+	r.ResponseWriter.WriteHeader(status)
+}
+
+func (r *responseRecorder) Write(p []byte) (int, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	n, err := r.ResponseWriter.Write(p)
+	r.bytes += n
+	return n, err
+}
+
+func (r *responseRecorder) Flush() {
+	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (s *Server) withLogging(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		recorder := &responseRecorder{ResponseWriter: w}
+		next.ServeHTTP(recorder, r)
+		status := recorder.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		fields := []zap.Field{
+			zap.String("method", r.Method),
+			zap.String("path", r.URL.RequestURI()),
+			zap.Int("status", status),
+			zap.Duration("duration", time.Since(start)),
+			zap.Int("bytes", recorder.bytes),
+		}
+		if status >= http.StatusInternalServerError {
+			logging.L().Error("request failed", fields...)
+		} else {
+			logging.L().Debug("request handled", fields...)
+		}
 	})
 }
 

@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 
+	"bops/internal/logging"
+	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
 
@@ -50,6 +52,7 @@ func New(dir string) *Store {
 }
 
 func (s *Store) List() ([]Summary, error) {
+	logging.L().Debug("ai draft list", zap.String("dir", s.Dir))
 	if err := s.ensureDir(); err != nil {
 		return nil, err
 	}
@@ -96,10 +99,12 @@ func (s *Store) List() ([]Summary, error) {
 		return items[i].UpdatedAt.After(items[j].UpdatedAt)
 	})
 
+	logging.L().Debug("ai draft list done", zap.Int("count", len(items)))
 	return items, nil
 }
 
 func (s *Store) Get(id string) (Draft, []byte, error) {
+	logging.L().Debug("ai draft get", zap.String("id", id))
 	path, err := s.path(id)
 	if err != nil {
 		return Draft{}, nil, err
@@ -124,10 +129,16 @@ func (s *Store) Get(id string) (Draft, []byte, error) {
 		draft.UpdatedAt = fileModTime(path)
 	}
 
+	logging.L().Debug("ai draft get done", zap.String("id", draft.ID))
 	return draft, data, nil
 }
 
 func (s *Store) Save(input Draft) (Draft, error) {
+	logging.L().Debug("ai draft save",
+		zap.String("id", input.ID),
+		zap.Int("yaml_len", len(input.YAML)),
+		zap.Int("issues", len(input.Issues)),
+	)
 	if err := s.ensureDir(); err != nil {
 		return Draft{}, err
 	}
@@ -190,6 +201,7 @@ func (s *Store) Save(input Draft) (Draft, error) {
 		return Draft{}, err
 	}
 
+	logging.L().Debug("ai draft saved", zap.String("id", draft.ID))
 	return draft, nil
 }
 

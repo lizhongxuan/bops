@@ -8,7 +8,9 @@ import (
 	"strings"
 	"time"
 
+	"bops/internal/logging"
 	"bops/internal/workflow"
+	"go.uber.org/zap"
 )
 
 type Summary struct {
@@ -26,6 +28,7 @@ func New(dir string) *Store {
 }
 
 func (s *Store) List() ([]Summary, error) {
+	logging.L().Debug("workflow list", zap.String("dir", s.Dir))
 	if err := s.ensureDir(); err != nil {
 		return nil, err
 	}
@@ -69,10 +72,12 @@ func (s *Store) List() ([]Summary, error) {
 		return items[i].UpdatedAt.After(items[j].UpdatedAt)
 	})
 
+	logging.L().Debug("workflow list done", zap.Int("count", len(items)))
 	return items, nil
 }
 
 func (s *Store) Get(name string) (workflow.Workflow, []byte, error) {
+	logging.L().Debug("workflow get", zap.String("name", name))
 	path, err := s.path(name)
 	if err != nil {
 		return workflow.Workflow{}, nil, err
@@ -88,10 +93,12 @@ func (s *Store) Get(name string) (workflow.Workflow, []byte, error) {
 		return workflow.Workflow{}, nil, err
 	}
 
+	logging.L().Debug("workflow get done", zap.String("name", wf.Name))
 	return wf, data, nil
 }
 
 func (s *Store) Put(name string, raw []byte) (workflow.Workflow, error) {
+	logging.L().Debug("workflow put", zap.String("name", name), zap.Int("yaml_len", len(raw)))
 	if err := s.ensureDir(); err != nil {
 		return workflow.Workflow{}, err
 	}
@@ -121,6 +128,7 @@ func (s *Store) Put(name string, raw []byte) (workflow.Workflow, error) {
 		return workflow.Workflow{}, err
 	}
 
+	logging.L().Debug("workflow put done", zap.String("name", name))
 	return wf, nil
 }
 

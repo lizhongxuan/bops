@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"bops/internal/logging"
+	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
 
@@ -32,6 +34,7 @@ func New(dir string) *Store {
 }
 
 func (s *Store) List() ([]Summary, error) {
+	logging.L().Debug("env package list", zap.String("dir", s.Dir))
 	if err := s.ensureDir(); err != nil {
 		return nil, err
 	}
@@ -76,10 +79,12 @@ func (s *Store) List() ([]Summary, error) {
 		return items[i].UpdatedAt.After(items[j].UpdatedAt)
 	})
 
+	logging.L().Debug("env package list done", zap.Int("count", len(items)))
 	return items, nil
 }
 
 func (s *Store) Get(name string) (Package, []byte, error) {
+	logging.L().Debug("env package get", zap.String("name", name))
 	path, err := s.path(name)
 	if err != nil {
 		return Package{}, nil, err
@@ -98,10 +103,12 @@ func (s *Store) Get(name string) (Package, []byte, error) {
 		pkg.Name = name
 	}
 
+	logging.L().Debug("env package get done", zap.String("name", pkg.Name))
 	return pkg, data, nil
 }
 
 func (s *Store) Put(name string, pkg Package) (Package, error) {
+	logging.L().Debug("env package put", zap.String("name", name))
 	if err := s.ensureDir(); err != nil {
 		return Package{}, err
 	}
@@ -132,6 +139,7 @@ func (s *Store) Put(name string, pkg Package) (Package, error) {
 		return Package{}, err
 	}
 
+	logging.L().Debug("env package put done", zap.String("name", pkg.Name))
 	return pkg, nil
 }
 

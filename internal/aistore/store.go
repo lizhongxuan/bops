@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"bops/internal/ai"
+	"bops/internal/logging"
+	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
 
@@ -38,6 +40,7 @@ func New(dir string) *Store {
 }
 
 func (s *Store) List() ([]Summary, error) {
+	logging.L().Debug("ai session list", zap.String("dir", s.Dir))
 	if err := s.ensureDir(); err != nil {
 		return nil, err
 	}
@@ -86,10 +89,12 @@ func (s *Store) List() ([]Summary, error) {
 		return items[i].UpdatedAt.After(items[j].UpdatedAt)
 	})
 
+	logging.L().Debug("ai session list done", zap.Int("count", len(items)))
 	return items, nil
 }
 
 func (s *Store) Get(id string) (Session, []byte, error) {
+	logging.L().Debug("ai session get", zap.String("id", id))
 	path, err := s.path(id)
 	if err != nil {
 		return Session{}, nil, err
@@ -114,10 +119,12 @@ func (s *Store) Get(id string) (Session, []byte, error) {
 		session.UpdatedAt = fileModTime(path)
 	}
 
+	logging.L().Debug("ai session get done", zap.String("id", session.ID))
 	return session, data, nil
 }
 
 func (s *Store) Create(title string) (Session, error) {
+	logging.L().Debug("ai session create", zap.String("title", title))
 	id := newSessionID()
 	trimmed := strings.TrimSpace(title)
 	if trimmed == "" {
@@ -136,10 +143,12 @@ func (s *Store) Create(title string) (Session, error) {
 		return Session{}, err
 	}
 
+	logging.L().Debug("ai session created", zap.String("id", session.ID))
 	return session, nil
 }
 
 func (s *Store) Save(session Session) error {
+	logging.L().Debug("ai session save", zap.String("id", session.ID), zap.Int("messages", len(session.Messages)))
 	if err := s.ensureDir(); err != nil {
 		return err
 	}
@@ -165,10 +174,15 @@ func (s *Store) Save(session Session) error {
 		return err
 	}
 
-	return os.WriteFile(path, raw, 0o644)
+	if err := os.WriteFile(path, raw, 0o644); err != nil {
+		return err
+	}
+	logging.L().Debug("ai session saved", zap.String("id", session.ID))
+	return nil
 }
 
 func (s *Store) AppendMessage(id string, msg ai.Message) (Session, error) {
+	logging.L().Debug("ai session append message", zap.String("id", id), zap.String("role", msg.Role))
 	session, _, err := s.Get(id)
 	if err != nil {
 		return Session{}, err
@@ -177,6 +191,7 @@ func (s *Store) AppendMessage(id string, msg ai.Message) (Session, error) {
 	if err := s.Save(session); err != nil {
 		return Session{}, err
 	}
+	logging.L().Debug("ai session message appended", zap.String("id", id), zap.Int("messages", len(session.Messages)))
 	return session, nil
 }
 

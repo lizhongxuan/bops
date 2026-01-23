@@ -112,7 +112,7 @@ func TestAIChatSessionFlow(t *testing.T) {
 		Session struct {
 			Messages []ai.Message `json:"messages"`
 		} `json:"session"`
-		Reply ai.Message `json:"reply"`
+		Reply *ai.Message `json:"reply"`
 	}
 	if err := json.NewDecoder(messageRec.Body).Decode(&msgResp); err != nil {
 		t.Fatalf("decode message response: %v", err)
@@ -120,7 +120,11 @@ func TestAIChatSessionFlow(t *testing.T) {
 	if len(msgResp.Session.Messages) != 2 {
 		t.Fatalf("expected 2 messages, got %d", len(msgResp.Session.Messages))
 	}
-	if msgResp.Reply.Content != "hi there" {
-		t.Fatalf("unexpected reply: %s", msgResp.Reply.Content)
+	if msgResp.Reply == nil || msgResp.Reply.Content != "hi there" {
+		replyText := ""
+		if msgResp.Reply != nil {
+			replyText = msgResp.Reply.Content
+		}
+		t.Fatalf("unexpected reply: %s", replyText)
 	}
 }

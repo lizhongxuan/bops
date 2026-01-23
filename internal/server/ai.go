@@ -5,14 +5,17 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"bops/internal/ai"
 	"bops/internal/aistore"
 	"bops/internal/aiworkflow"
 	"bops/internal/aiworkflowstore"
+	"bops/internal/logging"
 	"bops/internal/validationenv"
 	"bops/internal/validationrun"
 	"bops/internal/workflow"
+	"go.uber.org/zap"
 )
 
 const maxChatContextMessages = 20
@@ -32,10 +35,12 @@ type aiSessionResponse struct {
 
 type aiChatRequest struct {
 	Content string `json:"content"`
+	Role    string `json:"role,omitempty"`
+	SkipAI  bool   `json:"skip_ai,omitempty"`
 }
 
 type aiChatResponse struct {
-	Reply   ai.Message      `json:"reply"`
+	Reply   *ai.Message     `json:"reply,omitempty"`
 	Session aistore.Session `json:"session"`
 }
 
@@ -109,31 +114,31 @@ func (s *Server) handleAIChatSessions(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		items, err := s.aiStore.List()
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeError(w, r, http.StatusInternalServerError, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, aiSessionListResponse{Items: items, Total: len(items)})
 	case http.MethodPost:
 		body, err := readBody(r)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
 		var req aiSessionCreateRequest
 		if len(body) > 0 {
 			if err := json.Unmarshal(body, &req); err != nil {
-				writeError(w, http.StatusBadRequest, "invalid json payload")
+				writeError(w, r, http.StatusBadRequest, "invalid json payload")
 				return
 			}
 		}
 		session, err := s.aiStore.Create(req.Title)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeError(w, r, http.StatusInternalServerError, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, aiSessionResponse{Session: session})
 	default:
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		writeError(w, r, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }
 
@@ -147,18 +152,18 @@ func (s *Server) handleAIChatSession(w http.ResponseWriter, r *http.Request) {
 
 	id := strings.Trim(path, "/")
 	if id == "" {
-		writeError(w, http.StatusNotFound, "session id is required")
+		writeError(w, r, http.StatusNotFound, "session id is required")
 		return
 	}
 
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		writeError(w, r, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
 	session, _, err := s.aiStore.Get(id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		writeError(w, r, http.StatusNotFound, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, aiSessionResponse{Session: session})
@@ -166,46 +171,69 @@ func (s *Server) handleAIChatSession(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAIChatMessages(w http.ResponseWriter, r *http.Request, id string) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		writeError(w, r, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	id = strings.Trim(id, "/")
 	if id == "" {
-		writeError(w, http.StatusNotFound, "session id is required")
+		writeError(w, r, http.StatusNotFound, "session id is required")
 		return
 	}
-	if s.aiClient == nil {
-		writeError(w, http.StatusServiceUnavailable, "ai provider is not configured")
-		return
-	}
-
 	body, err := readBody(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 	var req aiChatRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json payload")
+		writeError(w, r, http.StatusBadRequest, "invalid json payload")
 		return
 	}
 	if strings.TrimSpace(req.Content) == "" {
-		writeError(w, http.StatusBadRequest, "content is required")
+		writeError(w, r, http.StatusBadRequest, "content is required")
 		return
 	}
 
 	session, _, err := s.aiStore.Get(id)
 	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		writeError(w, r, http.StatusNotFound, err.Error())
 		return
 	}
 
-	userMsg := ai.Message{Role: "user", Content: strings.TrimSpace(req.Content)}
+	role := strings.TrimSpace(req.Role)
+	if role == "" {
+		role = "user"
+	}
+	if role != "user" && role != "assistant" && role != "system" {
+		writeError(w, r, http.StatusBadRequest, "invalid role")
+		return
+	}
+
+	if req.SkipAI || s.aiClient == nil {
+		msg := ai.Message{Role: role, Content: strings.TrimSpace(req.Content)}
+		session.Messages = append(session.Messages, msg)
+		if session.Title == "新会话" && role == "user" && strings.TrimSpace(session.Messages[0].Content) != "" {
+			session.Title = titleFromMessage(session.Messages[0].Content)
+		}
+		if err := s.aiStore.Save(session); err != nil {
+			writeError(w, r, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, aiChatResponse{Session: session})
+		return
+	}
+
+	if s.aiClient == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "ai provider is not configured")
+		return
+	}
+
+	userMsg := ai.Message{Role: role, Content: strings.TrimSpace(req.Content)}
 	messages := s.buildChatMessages(session.Messages, userMsg)
 
 	reply, err := s.aiClient.Chat(r.Context(), messages)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -215,35 +243,35 @@ func (s *Server) handleAIChatMessages(w http.ResponseWriter, r *http.Request, id
 		session.Title = titleFromMessage(session.Messages[0].Content)
 	}
 	if err := s.aiStore.Save(session); err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 
-	writeJSON(w, http.StatusOK, aiChatResponse{Reply: assistantMsg, Session: session})
+	writeJSON(w, http.StatusOK, aiChatResponse{Reply: &assistantMsg, Session: session})
 }
 
 func (s *Server) handleAIWorkflowGenerate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		writeError(w, r, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if s.aiWorkflow == nil {
-		writeError(w, http.StatusServiceUnavailable, "ai provider is not configured")
+		writeError(w, r, http.StatusServiceUnavailable, "ai provider is not configured")
 		return
 	}
 
 	body, err := readBody(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 	var req aiGenerateRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json payload")
+		writeError(w, r, http.StatusBadRequest, "invalid json payload")
 		return
 	}
 	if strings.TrimSpace(req.Prompt) == "" {
-		writeError(w, http.StatusBadRequest, "prompt is required")
+		writeError(w, r, http.StatusBadRequest, "prompt is required")
 		return
 	}
 
@@ -255,7 +283,7 @@ func (s *Server) handleAIWorkflowGenerate(w http.ResponseWriter, r *http.Request
 		SkipExecute:   true,
 	})
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -269,26 +297,26 @@ func (s *Server) handleAIWorkflowGenerate(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleAIWorkflowFix(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		writeError(w, r, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if s.aiWorkflow == nil {
-		writeError(w, http.StatusServiceUnavailable, "ai provider is not configured")
+		writeError(w, r, http.StatusServiceUnavailable, "ai provider is not configured")
 		return
 	}
 
 	body, err := readBody(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 	var req aiFixRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json payload")
+		writeError(w, r, http.StatusBadRequest, "invalid json payload")
 		return
 	}
 	if strings.TrimSpace(req.YAML) == "" {
-		writeError(w, http.StatusBadRequest, "yaml is required")
+		writeError(w, r, http.StatusBadRequest, "yaml is required")
 		return
 	}
 
@@ -298,7 +326,7 @@ func (s *Server) handleAIWorkflowFix(w http.ResponseWriter, r *http.Request) {
 		SkipExecute:   true,
 	})
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 
@@ -316,22 +344,22 @@ func (s *Server) handleAIWorkflowFix(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAIWorkflowValidate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		writeError(w, r, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
 	body, err := readBody(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 	var req aiValidateRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json payload")
+		writeError(w, r, http.StatusBadRequest, "invalid json payload")
 		return
 	}
 	if strings.TrimSpace(req.YAML) == "" {
-		writeError(w, http.StatusBadRequest, "yaml is required")
+		writeError(w, r, http.StatusBadRequest, "yaml is required")
 		return
 	}
 
@@ -356,22 +384,22 @@ func (s *Server) handleAIWorkflowValidate(w http.ResponseWriter, r *http.Request
 
 func (s *Server) handleAIWorkflowExecute(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		writeError(w, r, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
 	body, err := readBody(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 	var req aiExecuteRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json payload")
+		writeError(w, r, http.StatusBadRequest, "invalid json payload")
 		return
 	}
 	if strings.TrimSpace(req.YAML) == "" {
-		writeError(w, http.StatusBadRequest, "yaml is required")
+		writeError(w, r, http.StatusBadRequest, "yaml is required")
 		return
 	}
 
@@ -385,7 +413,7 @@ func (s *Server) handleAIWorkflowExecute(w http.ResponseWriter, r *http.Request)
 		env = s.defaultValidationEnv()
 	}
 	if env == nil {
-		writeError(w, http.StatusBadRequest, "validation env is required")
+		writeError(w, r, http.StatusBadRequest, "validation env is required")
 		return
 	}
 
@@ -415,22 +443,22 @@ func (s *Server) handleAIWorkflowExecute(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) handleAIWorkflowSummary(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		writeError(w, r, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
 	body, err := readBody(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 	var req aiSummaryRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json payload")
+		writeError(w, r, http.StatusBadRequest, "invalid json payload")
 		return
 	}
 	if strings.TrimSpace(req.YAML) == "" {
-		writeError(w, http.StatusBadRequest, "yaml is required")
+		writeError(w, r, http.StatusBadRequest, "yaml is required")
 		return
 	}
 
@@ -465,28 +493,28 @@ func (s *Server) handleAIWorkflowSummary(w http.ResponseWriter, r *http.Request)
 
 func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		writeError(w, r, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 	if s.aiWorkflow == nil {
-		writeError(w, http.StatusServiceUnavailable, "ai provider is not configured")
+		writeError(w, r, http.StatusServiceUnavailable, "ai provider is not configured")
 		return
 	}
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		writeError(w, http.StatusBadRequest, "streaming unsupported")
+		writeError(w, r, http.StatusBadRequest, "streaming unsupported")
 		return
 	}
 
 	body, err := readBody(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 	var req aiStreamRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid json payload")
+		writeError(w, r, http.StatusBadRequest, "invalid json payload")
 		return
 	}
 
@@ -495,11 +523,11 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 		mode = string(aiworkflow.ModeGenerate)
 	}
 	if mode == string(aiworkflow.ModeGenerate) && strings.TrimSpace(req.Prompt) == "" {
-		writeError(w, http.StatusBadRequest, "prompt is required")
+		writeError(w, r, http.StatusBadRequest, "prompt is required")
 		return
 	}
 	if mode == string(aiworkflow.ModeFix) && strings.TrimSpace(req.YAML) == "" {
-		writeError(w, http.StatusBadRequest, "yaml is required")
+		writeError(w, r, http.StatusBadRequest, "yaml is required")
 		return
 	}
 
@@ -518,6 +546,16 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 		envName = env.Name
 		envType = string(env.Type)
 	}
+	logging.L().Debug("ai workflow stream start",
+		zap.String("mode", mode),
+		zap.Int("prompt_len", len(strings.TrimSpace(req.Prompt))),
+		zap.Int("yaml_len", len(req.YAML)),
+		zap.Int("issues", len(req.Issues)),
+		zap.Bool("execute", req.Execute),
+		zap.Int("max_retries", req.MaxRetries),
+		zap.String("env", envName),
+		zap.String("draft_id", strings.TrimSpace(req.DraftID)),
+	)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -525,6 +563,7 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 
 	ctx := r.Context()
 	events := make(chan aiworkflow.Event, 16)
+	streamCh := make(chan ai.StreamDelta, 32)
 	type streamResult struct {
 		state *aiworkflow.State
 		err   error
@@ -537,6 +576,12 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 		case <-ctx.Done():
 		}
 	}
+	streamSink := func(delta ai.StreamDelta) {
+		select {
+		case streamCh <- delta:
+		case <-ctx.Done():
+		}
+	}
 
 	contextText := s.buildContextText(req.Context)
 	opts := aiworkflow.RunOptions{
@@ -546,9 +591,12 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 		SkipExecute:   !req.Execute,
 		MaxRetries:    req.MaxRetries,
 		EventSink:     sink,
+		StreamSink:    streamSink,
 	}
 
 	go func() {
+		defer close(events)
+		defer close(streamCh)
 		var state *aiworkflow.State
 		var runErr error
 		if mode == string(aiworkflow.ModeFix) {
@@ -557,8 +605,10 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 			state, runErr = s.aiWorkflow.RunGenerate(ctx, strings.TrimSpace(req.Prompt), req.Context, opts)
 		}
 		resultCh <- streamResult{state: state, err: runErr}
-		close(events)
 	}()
+
+	var pending *streamResult
+	sentThoughtDelta := false
 
 	for {
 		select {
@@ -569,23 +619,46 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 				continue
 			}
 			events = nil
+		case delta, ok := <-streamCh:
+			if ok {
+				if delta.Thought != "" {
+					sentThoughtDelta = true
+					writeSSE(w, "delta", map[string]any{
+						"channel": "thought",
+						"content": delta.Thought,
+					})
+					flusher.Flush()
+				}
+				continue
+			}
+			streamCh = nil
 		case result := <-resultCh:
 			if result.err != nil {
 				writeSSE(w, "error", map[string]string{"error": result.err.Error()})
 				flusher.Flush()
 				return
 			}
-			if result.state != nil && result.state.ExecutionResult != nil && !result.state.ExecutionSkipped {
-				execResult := result.state.ExecutionResult
+			pending = &result
+			resultCh = nil
+		case <-ctx.Done():
+			return
+		}
+
+		if pending != nil && events == nil && streamCh == nil {
+			if pending.state != nil && !sentThoughtDelta {
+				streamThought(w, flusher, pending.state.Thought)
+			}
+			if pending.state != nil && pending.state.ExecutionResult != nil && !pending.state.ExecutionSkipped {
+				execResult := pending.state.ExecutionResult
 				s.recordValidationAudit(validationAuditEntry{
 					Source:    "ai-workflow-stream",
 					Env:       envName,
 					EnvType:   envType,
 					Status:    execResult.Status,
 					Code:      execResult.Code,
-					Error:     result.state.LastError,
-					YAMLHash:  hashYAML(result.state.YAML),
-					StepCount: countStepsInYAML(result.state.YAML),
+					Error:     pending.state.LastError,
+					YAMLHash:  hashYAML(pending.state.YAML),
+					StepCount: countStepsInYAML(pending.state.YAML),
 				})
 			}
 			title := ""
@@ -596,21 +669,27 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 			} else if strings.TrimSpace(req.DraftID) == "" {
 				title = "AI Fix"
 			}
-			draftID := s.saveAIDraft(req.DraftID, title, prompt, result.state)
+			draftID := s.saveAIDraft(req.DraftID, title, prompt, pending.state)
 			payload := map[string]any{
-				"yaml":         result.state.YAML,
-				"summary":      result.state.Summary,
-				"issues":       result.state.Issues,
-				"risk_level":   result.state.RiskLevel,
-				"needs_review": result.state.NeedsReview,
-				"questions":    result.state.Questions,
-				"history":      result.state.History,
+				"yaml":         pending.state.YAML,
+				"summary":      pending.state.Summary,
+				"issues":       pending.state.Issues,
+				"risk_level":   pending.state.RiskLevel,
+				"needs_review": pending.state.NeedsReview,
+				"questions":    pending.state.Questions,
+				"history":      pending.state.History,
 				"draft_id":     draftID,
 			}
+			logging.L().Debug("ai workflow stream result",
+				zap.String("mode", mode),
+				zap.Int("yaml_len", len(pending.state.YAML)),
+				zap.Int("issues", len(pending.state.Issues)),
+				zap.String("risk_level", string(pending.state.RiskLevel)),
+				zap.Bool("needs_review", pending.state.NeedsReview),
+				zap.String("draft_id", draftID),
+			)
 			writeSSE(w, "result", payload)
 			flusher.Flush()
-			return
-		case <-ctx.Done():
 			return
 		}
 	}
@@ -637,6 +716,37 @@ func writeSSE(w http.ResponseWriter, event string, payload any) {
 		_, _ = fmt.Fprintf(w, "event: %s\n", event)
 	}
 	_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+}
+
+func streamThought(w http.ResponseWriter, flusher http.Flusher, thought string) {
+	trimmed := strings.TrimSpace(thought)
+	if trimmed == "" {
+		return
+	}
+	for _, chunk := range chunkRunes(trimmed, 12) {
+		writeSSE(w, "delta", map[string]any{
+			"channel": "thought",
+			"content": chunk,
+		})
+		flusher.Flush()
+		time.Sleep(18 * time.Millisecond)
+	}
+}
+
+func chunkRunes(text string, size int) []string {
+	if size <= 0 {
+		return []string{text}
+	}
+	runes := []rune(text)
+	chunks := make([]string, 0, (len(runes)+size-1)/size)
+	for i := 0; i < len(runes); i += size {
+		end := i + size
+		if end > len(runes) {
+			end = len(runes)
+		}
+		chunks = append(chunks, string(runes[i:end]))
+	}
+	return chunks
 }
 
 func (s *Server) saveAIDraft(id, title, prompt string, state *aiworkflow.State) string {

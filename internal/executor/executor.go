@@ -8,7 +8,9 @@ import (
 	"sync"
 	"time"
 
+	"bops/internal/logging"
 	"bops/internal/workflow"
+	"go.uber.org/zap"
 )
 
 type HostRunner interface {
@@ -29,6 +31,10 @@ func (e *Executor) Run(ctx context.Context, wf workflow.Workflow) error {
 	if e.Runner == nil {
 		return fmt.Errorf("executor runner is nil")
 	}
+	logging.L().Debug("executor run start",
+		zap.String("workflow", wf.Name),
+		zap.Int("steps", len(wf.Steps)),
+	)
 
 	hosts := wf.Inventory.ResolveHosts()
 	handlers := map[string]workflow.Handler{}
@@ -50,6 +56,11 @@ func (e *Executor) Run(ctx context.Context, wf workflow.Workflow) error {
 			return err
 		}
 
+		logging.L().Debug("executor step start",
+			zap.String("step", step.Name),
+			zap.String("action", step.Action),
+			zap.Int("targets", len(targets)),
+		)
 		if e.Observer != nil {
 			e.Observer.StepStart(step, targets)
 		}
@@ -64,6 +75,7 @@ func (e *Executor) Run(ctx context.Context, wf workflow.Workflow) error {
 				if e.Observer != nil {
 					e.Observer.StepFinish(step, "failed")
 				}
+				logging.L().Debug("executor step failed", zap.String("step", step.Name), zap.Error(err))
 				return err
 			}
 			if len(step.Notify) > 0 {
@@ -71,6 +83,7 @@ func (e *Executor) Run(ctx context.Context, wf workflow.Workflow) error {
 					if e.Observer != nil {
 						e.Observer.StepFinish(step, "failed")
 					}
+					logging.L().Debug("executor handler failed", zap.String("step", step.Name), zap.Error(err))
 					return err
 				}
 			}
@@ -79,8 +92,10 @@ func (e *Executor) Run(ctx context.Context, wf workflow.Workflow) error {
 		if e.Observer != nil {
 			e.Observer.StepFinish(step, "success")
 		}
+		logging.L().Debug("executor step done", zap.String("step", step.Name))
 	}
 
+	logging.L().Debug("executor run done", zap.String("workflow", wf.Name))
 	return nil
 }
 
@@ -134,6 +149,7 @@ func (e *Executor) runHandlers(ctx context.Context, handlers map[string]workflow
 		if !ok {
 			return fmt.Errorf("handler %q not found", name)
 		}
+		logging.L().Debug("executor handler start", zap.String("handler", handler.Name))
 
 		shouldRun, err := evalWhen(handler.When)
 		if err != nil {
@@ -180,6 +196,12 @@ func runWithRetry(ctx context.Context, runner HostRunner, step workflow.Step, ho
 			return nil
 		}
 		lastErr = err
+		logging.L().Debug("executor retry",
+			zap.String("step", step.Name),
+			zap.String("host", host.Name),
+			zap.Int("attempt", i+1),
+			zap.Error(err),
+		)
 	}
 
 	return lastErr

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
 	"bops/internal/ai"
 )
@@ -19,6 +20,7 @@ type Intent struct {
 }
 
 const intentSystemPrompt = "You are a workflow intent extractor. Return JSON only."
+const intentExtractTimeout = 8 * time.Second
 
 func (p *Pipeline) intentExtract(ctx context.Context, state *State) (*State, error) {
 	if state.Mode != ModeGenerate {
@@ -36,14 +38,18 @@ func (p *Pipeline) intentExtract(ctx context.Context, state *State) (*State, err
 		{Role: "system", Content: intentSystemPrompt},
 		{Role: "user", Content: prompt},
 	}
-	reply, err := p.cfg.Client.Chat(ctx, messages)
+	state.Intent = nil
+	state.Questions = nil
+	ctxWithTimeout, cancel := context.WithTimeout(ctx, intentExtractTimeout)
+	defer cancel()
+	reply, err := p.cfg.Client.Chat(ctxWithTimeout, messages)
 	if err != nil {
-		emitEvent(state, "intent_extract", "error", err.Error())
-		return state, err
+		emitEvent(state, "intent_extract", "warn", err.Error())
+		return state, nil
 	}
 	intent, err := parseIntentResponse(reply)
 	if err != nil {
-		emitEvent(state, "intent_extract", "error", err.Error())
+		emitEvent(state, "intent_extract", "warn", err.Error())
 		return state, nil
 	}
 	intent.Missing = normalizeMissing(intent.Missing)

@@ -5,7 +5,7 @@
         <div class="panel-head chat-head">
           <div>
             <h2>工作流AI助手</h2>
-            <p>AI 负责拆解需求并生成草稿，你只需确认关键细节。当前会话：{{ chatSessionTitle || '新会话' }}</p>
+            <p>{{ aiDisplayName }} 负责拆解需求并生成草稿，你只需确认关键细节。当前会话：{{ chatSessionTitle || '新会话' }}</p>
           </div>
           <div class="status-tag" :class="streamError ? 'error' : busy || chatPending ? 'busy' : 'idle'">
             {{ streamError ? '异常' : busy ? '生成中' : chatPending ? '对话中' : '就绪' }}
@@ -28,7 +28,7 @@
             </li>
             <li v-if="chatPending" class="timeline-item typing">
               <div class="timeline-header">
-                <span class="timeline-badge ai">AI</span>
+                <span class="timeline-badge ai">{{ aiDisplayName }}</span>
                 <small>...</small>
               </div>
               <p>正在回复...</p>
@@ -69,6 +69,19 @@
           <div v-if="!aiConfigured" class="ai-config-warning">
             未配置AI,无法使用,请
             <button class="link-button" type="button" @click="goToSettings">设置</button>
+          </div>
+          <div v-if="streamStatus" class="stream-status" :class="streamStatusType">
+            {{ streamStatus }}
+          </div>
+          <div v-if="recentProgressEvents.length && !streamStatus" class="progress-mini">
+            <div
+              class="progress-mini-item"
+              v-for="(evt, index) in recentProgressEvents"
+              :key="`${evt.node}-${index}`"
+            >
+              <span class="node">{{ formatStreamNode(evt.node || "AI") }}</span>
+              <span class="status" :class="evt.status">{{ evt.status === "running" ? "运行中" : evt.status }}</span>
+            </div>
           </div>
           <textarea
             v-model="prompt"
@@ -607,6 +620,12 @@ type ChatEntry = {
   actionLabel?: string;
 };
 
+type StreamReply = {
+  text: string;
+  type: ChatEntry["type"];
+  extra?: string;
+};
+
 type ChatSessionMessage = {
   role: string;
   content: string;
@@ -672,15 +691,22 @@ const yamlDirty = ref(false);
 const busy = ref(false);
 const streamError = ref("");
 const progressEvents = ref<ProgressEvent[]>([]);
+const defaultAIName = "AI";
 const chatEntries = ref<ChatEntry[]>([
   {
     id: "welcome",
-    label: "AI",
+    label: defaultAIName,
     body: "你好！告诉我你的需求，我会拆解成可执行工作流，并主动追问缺失细节。",
     type: "ai"
   }
 ]);
 const chatPending = ref(false);
+const liveThoughtEntryId = ref<string | null>(null);
+const liveThoughtText = ref("");
+const liveAnswerEntryId = ref<string | null>(null);
+const hasStreamDelta = ref(false);
+let liveAnswerTimer: number | null = null;
+const activeNodes = ref<string[]>([]);
 const chatSessions = ref<ChatSessionSummary[]>([]);
 const chatSessionId = ref("");
 const chatSessionTitle = ref("");
@@ -693,6 +719,10 @@ const validationTouched = ref(false);
 const validationBusy = ref(false);
 const executeBusy = ref(false);
 const executeResult = ref<ExecutionResult | null>(null);
+const streamStatus = ref("");
+const streamStatusType = ref("");
+const lastStatusError = ref("");
+const lastStreamError = ref("");
 const summary = ref<SummaryState>({
   summary: "",
   steps: 0,
@@ -771,6 +801,13 @@ const pendingQuestions = computed(() => {
   return resolveQuestions(questionOverrides.value, issues, 6);
 });
 const aiConfigured = computed(() => aiConfig.value.configured);
+const aiDisplayName = computed(() => aiConfig.value.provider || defaultAIName);
+const recentProgressEvents = computed<ProgressEvent[]>(() =>
+  activeNodes.value.map((node) => ({
+    node,
+    status: "running"
+  }))
+);
 const syncBlocked = computed(() => !autoSync.value && (visualDirty.value || yamlDirty.value));
 const canShowIssues = computed(() => !syncBlocked.value);
 
@@ -800,6 +837,13 @@ watch(
   },
   { immediate: true }
 );
+
+watch(aiDisplayName, (next) => {
+  chatEntries.value = chatEntries.value.map((entry) => {
+    if (entry.type !== "ai" && entry.type !== "thinking") return entry;
+    return { ...entry, label: next };
+  });
+});
 
 watch(saveName, () => {
   if (saveError.value) {
@@ -854,6 +898,118 @@ async function loadAIConfig() {
 function pushChatEntry(entry: Omit<ChatEntry, "id">) {
   const id = `chat-${chatIndex++}`;
   chatEntries.value = [...chatEntries.value, { id, ...entry }];
+  return id;
+}
+
+function updateChatEntry(id: string, updater: (entry: ChatEntry) => ChatEntry) {
+  const index = chatEntries.value.findIndex((entry) => entry.id === id);
+  if (index < 0) return;
+  const next = [...chatEntries.value];
+  next[index] = updater(next[index]);
+  chatEntries.value = next;
+}
+
+function resetStreamState() {
+  if (liveAnswerTimer) {
+    window.clearInterval(liveAnswerTimer);
+    liveAnswerTimer = null;
+  }
+  liveThoughtEntryId.value = null;
+  liveThoughtText.value = "";
+  liveAnswerEntryId.value = null;
+  hasStreamDelta.value = false;
+  activeNodes.value = [];
+  refreshActiveStatus();
+}
+
+function ensureThoughtEntry() {
+  if (liveThoughtEntryId.value) return liveThoughtEntryId.value;
+  const id = pushChatEntry({
+    label: aiDisplayName.value,
+    body: "",
+    type: "thinking",
+    extra: "THINK"
+  });
+  liveThoughtEntryId.value = id;
+  liveThoughtText.value = "";
+  return id;
+}
+
+function appendThoughtDelta(delta: string) {
+  if (!delta) return;
+  const id = ensureThoughtEntry();
+  liveThoughtText.value = `${liveThoughtText.value}${delta}`;
+  updateChatEntry(id, (entry) => ({
+    ...entry,
+    body: liveThoughtText.value
+  }));
+}
+
+function finalizeThoughtStream(status = "DONE") {
+  const id = liveThoughtEntryId.value;
+  if (!id) return;
+  updateChatEntry(id, (entry) => ({
+    ...entry,
+    extra: status
+  }));
+}
+
+function startAnswerStream(reply: StreamReply) {
+  if (!reply.text.trim()) return;
+  const id = pushChatEntry({
+    label: aiDisplayName.value,
+    body: "",
+    type: reply.type,
+    extra: reply.extra || "DONE"
+  });
+  liveAnswerEntryId.value = id;
+  let cursor = 0;
+  const text = reply.text;
+  const chunkSize = 6;
+  if (liveAnswerTimer) {
+    window.clearInterval(liveAnswerTimer);
+  }
+  liveAnswerTimer = window.setInterval(() => {
+    cursor = Math.min(text.length, cursor + chunkSize);
+    updateChatEntry(id, (entry) => ({
+      ...entry,
+      body: text.slice(0, cursor)
+    }));
+    if (cursor >= text.length) {
+      if (liveAnswerTimer) {
+        window.clearInterval(liveAnswerTimer);
+        liveAnswerTimer = null;
+      }
+      liveAnswerEntryId.value = null;
+      void appendChatSessionMessage("assistant", text);
+    }
+  }, 24);
+}
+
+function appendAnswerDelta(delta: string, type: ChatEntry["type"] = "ai") {
+  if (!delta) return;
+  let id = liveAnswerEntryId.value;
+  if (!id) {
+    id = pushChatEntry({
+      label: aiDisplayName.value,
+      body: "",
+      type,
+      extra: "STREAM"
+    });
+    liveAnswerEntryId.value = id;
+  }
+  updateChatEntry(id, (entry) => ({
+    ...entry,
+    body: `${entry.body || ""}${delta}`
+  }));
+}
+
+function stopAnswerStream() {
+  if (liveAnswerTimer) {
+    window.clearInterval(liveAnswerTimer);
+    liveAnswerTimer = null;
+  }
+  liveAnswerEntryId.value = null;
 }
 
 function setChatEntriesFromSession(session: ChatSession) {
@@ -862,7 +1018,7 @@ function setChatEntriesFromSession(session: ChatSession) {
     chatEntries.value = [
       {
         id: "welcome",
-        label: "AI",
+        label: aiDisplayName.value,
         body: "你好！告诉我你的需求，我会拆解成可执行工作流，并主动追问缺失细节。",
         type: "ai"
       }
@@ -871,7 +1027,7 @@ function setChatEntriesFromSession(session: ChatSession) {
   }
   chatEntries.value = messages.map((msg, index) => ({
     id: `session-${index}`,
-    label: msg.role === "user" ? "用户" : "AI",
+    label: msg.role === "user" ? "用户" : aiDisplayName.value,
     body: msg.content,
     type: msg.role === "user" ? "user" : "ai"
   }));
@@ -978,6 +1134,59 @@ function formatNode(node: string) {
   return node.replace(/_/g, " ");
 }
 
+const streamNodes = new Set(["question_gate", "generator"]);
+
+function formatStreamNode(node: string) {
+  if (node === "question_gate") return "问题确认";
+  if (node === "generator") return "生成";
+  return formatNode(node || "AI");
+}
+
+function refreshActiveStatus() {
+  if (!activeNodes.value.length) {
+    streamStatus.value = "";
+    streamStatusType.value = "";
+    return;
+  }
+  const labels = activeNodes.value.map(formatStreamNode).join("、");
+  streamStatus.value = `${labels}运行中...`;
+  streamStatusType.value = "busy";
+}
+
+function updateActiveNodes(evt: ProgressEvent) {
+  if (!streamNodes.has(evt.node)) return;
+  const next = new Set(activeNodes.value);
+  if (evt.status === "start") {
+    next.add(evt.node);
+  } else if (evt.status === "done" || evt.status === "skipped" || evt.status === "error") {
+    next.delete(evt.node);
+  }
+  activeNodes.value = Array.from(next);
+  refreshActiveStatus();
+}
+
+function updateProgressEvents(evt: ProgressEvent) {
+  if (!streamNodes.has(evt.node)) {
+    progressEvents.value = [...progressEvents.value, evt].slice(-40);
+    return;
+  }
+  if (evt.status === "start") {
+    const next = progressEvents.value.filter((item) => item.node !== evt.node);
+    next.push(evt);
+    progressEvents.value = next.slice(-40);
+    return;
+  }
+  progressEvents.value = progressEvents.value.filter((item) => item.node !== evt.node);
+}
+
+function translateErrorMessage(message: string) {
+  if (!message) return message;
+  if (message.includes("context deadline exceeded")) {
+    return "网络超时";
+  }
+  return message;
+}
+
 function getIndent(line: string) {
   const match = line.match(/^(\s*)/);
   return match ? match[1].length : 0;
@@ -1042,6 +1251,13 @@ function setVisualYaml(next: string, markDirty = true) {
   } else if (markDirty) {
     visualDirty.value = next !== yaml.value;
   }
+}
+
+function applyAIGeneratedYaml(next: string) {
+  yaml.value = next;
+  visualYaml.value = next;
+  visualDirty.value = false;
+  yamlDirty.value = false;
 }
 
 function applyVisualToYaml() {
@@ -1859,36 +2075,24 @@ async function ensureChatSession() {
   await createChatSession();
 }
 
-async function sendChatMessage(content: string) {
+async function appendChatSessionMessage(role: "user" | "assistant", content: string) {
+  if (!content.trim()) return;
   if (!chatSessionId.value) return;
-  chatPending.value = true;
   try {
-    const data = await request<{ reply: ChatSessionMessage; session: ChatSession }>(
-      `/ai/chat/sessions/${chatSessionId.value}/messages`,
-      {
-        method: "POST",
-        body: { content }
-      }
-    );
-    if (data.reply?.content) {
-      pushChatEntry({
-        label: "AI",
-        body: data.reply.content,
-        type: "ai"
-      });
-    }
+    const data = await request<{ session: ChatSession }>(`/ai/chat/sessions/${chatSessionId.value}/messages`, {
+      method: "POST",
+      body: { content, role, skip_ai: true }
+    });
     if (data.session?.title) {
       chatSessionTitle.value = data.session.title;
     }
   } catch (err) {
     pushChatEntry({
       label: "系统",
-      body: "聊天回复失败，请检查服务是否启动",
+      body: "聊天记录保存失败，请检查服务是否启动",
       type: "error",
       extra: "ERROR"
     });
-  } finally {
-    chatPending.value = false;
   }
 }
 
@@ -2080,13 +2284,22 @@ async function startStream() {
   if (!message) return;
   if (!aiConfigured.value) {
     streamError.value = "未配置AI,无法使用,请设置";
+    streamStatus.value = "";
+    streamStatusType.value = "";
     return;
   }
+  streamStatus.value = "AI 正在准备...";
+  streamStatusType.value = "busy";
+  lastStatusError.value = "";
+  lastStreamError.value = "";
   await ensureChatSession();
   pushChatEntry({ label: "用户", body: message, type: "user" });
+  prompt.value = "";
+  resetStreamState();
   showExamples.value = false;
   questionOverrides.value = [];
-  void sendChatMessage(message);
+  chatPending.value = true;
+  void appendChatSessionMessage("user", message);
   busy.value = true;
   streamError.value = "";
   progressEvents.value = [];
@@ -2104,6 +2317,7 @@ async function startStream() {
     await streamWorkflow(payload);
   } finally {
     busy.value = false;
+    chatPending.value = false;
   }
 }
 
@@ -2158,51 +2372,109 @@ function handleSSEChunk(chunk: string) {
   try {
     const payload = JSON.parse(data);
     if (eventName === "status") {
-      progressEvents.value = [...progressEvents.value, payload].slice(-40);
       const evt = payload as ProgressEvent;
-      if (evt.status === "error" && evt.message) {
+      const translatedMessage = translateErrorMessage(evt.message || "");
+      const normalizedEvt = translatedMessage ? { ...evt, message: translatedMessage } : evt;
+      updateProgressEvents(normalizedEvt);
+      updateActiveNodes(normalizedEvt);
+      if (normalizedEvt.status === "error" && translatedMessage) {
+        lastStatusError.value = translatedMessage;
+        if (translatedMessage !== lastStreamError.value) {
+          pushChatEntry({
+            label: formatNode(normalizedEvt.node || "AI"),
+            body: translatedMessage,
+            type: "error",
+            extra: "ERROR"
+          });
+        }
+      }
+    } else if (eventName === "delta") {
+      const content = typeof payload.content === "string" ? payload.content : "";
+      const channel = typeof payload.channel === "string" ? payload.channel : "answer";
+      if (channel === "thought") {
+        appendThoughtDelta(content);
+      } else {
+        hasStreamDelta.value = true;
+        appendAnswerDelta(content);
+      }
+    } else if (eventName === "result") {
+      const reply = applyResult(payload);
+      finalizeThoughtStream();
+      if (reply) {
+        if (hasStreamDelta.value) {
+          stopAnswerStream();
+          appendAnswerDelta(reply.text, reply.type);
+          void appendChatSessionMessage("assistant", reply.text);
+        } else {
+          startAnswerStream(reply);
+        }
+      }
+    } else if (eventName === "error") {
+      const nextError = translateErrorMessage(payload.error || "生成失败");
+      streamError.value = nextError;
+      chatPending.value = false;
+      const isDuplicate =
+        nextError === lastStreamError.value ||
+        nextError === lastStatusError.value ||
+        (lastStatusError.value && nextError.includes(lastStatusError.value));
+      if (!isDuplicate) {
         pushChatEntry({
-          label: formatNode(evt.node || "AI"),
-          body: evt.message,
+          label: "系统",
+          body: nextError,
           type: "error",
           extra: "ERROR"
         });
       }
-    } else if (eventName === "result") {
-      applyResult(payload);
-    } else if (eventName === "error") {
-      streamError.value = payload.error || "生成失败";
-      pushChatEntry({
-        label: "系统",
-        body: streamError.value,
-        type: "error",
-        extra: "ERROR"
-      });
+      lastStreamError.value = nextError;
+      streamStatus.value = "";
+      streamStatusType.value = "";
+      finalizeThoughtStream("ERROR");
+      stopAnswerStream();
+      activeNodes.value = [];
+      refreshActiveStatus();
     }
   } catch (err) {
     streamError.value = "解析流式数据失败";
+    chatPending.value = false;
   }
 }
 
-function applyResult(payload: Record<string, unknown>) {
+function applyResult(payload: Record<string, unknown>): StreamReply | null {
   const nextYaml = typeof payload.yaml === "string" ? payload.yaml : "";
   if (nextYaml) {
-    yaml.value = stripTargetsFromYaml(nextYaml);
+    const cleaned = stripTargetsFromYaml(nextYaml);
+    applyAIGeneratedYaml(cleaned);
   }
-  questionOverrides.value = normalizeQuestions(payload.questions);
+  const questions = normalizeQuestions(payload.questions);
+  questionOverrides.value = questions;
+  streamStatus.value = "";
+  streamStatusType.value = "";
+  chatPending.value = false;
   if (typeof payload.summary === "string") {
     summary.value.summary = payload.summary;
   }
   summary.value.riskLevel = String(payload.risk_level || "");
   summary.value.needsReview = Boolean(payload.needs_review);
-  summary.value.issues = Array.isArray(payload.issues) ? payload.issues : [];
-  const issueCount = Array.isArray(payload.issues) ? payload.issues.length : 0;
-  pushChatEntry({
-    label: "AI",
-    body: issueCount ? `已更新，待确认 ${issueCount} 项。` : "已更新草稿。",
-    type: issueCount ? "warn" : "ai",
-    extra: "DONE"
-  });
+  const issues = Array.isArray(payload.issues) ? payload.issues : [];
+  summary.value.issues = issues;
+  const issueCount = issues.length;
+  const replyLines: string[] = ["已更新到工作流。"];
+  let replyType: ChatEntry["type"] = "ai";
+  if (questions.length) {
+    const focus = questions.slice(0, 2).join("、");
+    replyLines.push(focus ? `还需要确认：${focus}。` : "还需要确认一些信息。");
+    replyLines.push("点击下方问题继续补充。");
+    replyType = "warn";
+  } else if (issueCount) {
+    replyLines.push(`校验发现 ${issueCount} 项问题，可点击“修复”或在右侧调整。`);
+    replyType = "warn";
+  } else {
+    replyLines.push("下一步建议：");
+    replyLines.push("1) 校验");
+    replyLines.push("2) 沙箱验证");
+    replyLines.push("3) 保存");
+  }
+  const reply = replyLines.join("\n");
   if (Array.isArray(payload.history)) {
     history.value = payload.history.filter((item) => typeof item === "string");
   }
@@ -2213,6 +2485,9 @@ function applyResult(payload: Record<string, unknown>) {
   confirmReason.value = "";
   selectedStepIndex.value = null;
   void refreshSummary();
+  activeNodes.value = [];
+  refreshActiveStatus();
+  return { text: reply, type: replyType, extra: "DONE" };
 }
 
 async function refreshSummary() {
@@ -2331,10 +2606,16 @@ async function runFix() {
     });
     return;
   }
+  resetStreamState();
   busy.value = true;
   streamError.value = "";
   progressEvents.value = [];
   executeResult.value = null;
+  streamStatus.value = "AI 正在修复...";
+  streamStatusType.value = "busy";
+  lastStatusError.value = "";
+  lastStreamError.value = "";
+  chatPending.value = true;
   pushChatEntry({
     label: "系统",
     body: "开始修复草稿...",
@@ -2355,6 +2636,7 @@ async function runFix() {
     await streamWorkflow(payload);
   } finally {
     busy.value = false;
+    chatPending.value = false;
   }
 }
 
@@ -2646,6 +2928,11 @@ function diffSummary(prev: string, next: string) {
   animation: fade-up 0.35s ease;
 }
 
+.timeline-item p {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .timeline-item.user {
   align-self: flex-end;
   background: rgba(46, 111, 227, 0.08);
@@ -2656,6 +2943,12 @@ function diffSummary(prev: string, next: string) {
   align-self: flex-start;
   background: rgba(42, 157, 75, 0.08);
   border-color: rgba(42, 157, 75, 0.2);
+}
+
+.timeline-item.thinking {
+  align-self: flex-start;
+  background: rgba(46, 111, 227, 0.08);
+  border-color: rgba(46, 111, 227, 0.2);
 }
 
 .timeline-item.warn {
@@ -2707,6 +3000,11 @@ function diffSummary(prev: string, next: string) {
   color: var(--ok);
 }
 
+.timeline-badge.thinking {
+  background: rgba(46, 111, 227, 0.12);
+  color: var(--info);
+}
+
 .timeline-badge.warn {
   background: rgba(230, 167, 0, 0.12);
   color: var(--warn);
@@ -2729,6 +3027,71 @@ function diffSummary(prev: string, next: string) {
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.stream-status {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 6px 10px;
+  border-radius: 10px;
+  background: rgba(27, 27, 27, 0.06);
+}
+
+.stream-status.busy {
+  color: var(--info);
+  background: rgba(46, 111, 227, 0.1);
+}
+
+.stream-status.done {
+  color: var(--ok);
+  background: rgba(42, 157, 75, 0.1);
+}
+
+.stream-status.warn {
+  color: var(--warn);
+  background: rgba(230, 167, 0, 0.1);
+}
+
+.stream-status.error {
+  color: var(--err);
+  background: rgba(208, 52, 44, 0.12);
+}
+
+.progress-mini {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.progress-mini-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 8px;
+  border-radius: 8px;
+  background: rgba(27, 27, 27, 0.04);
+}
+
+.progress-mini-item .status {
+  text-transform: uppercase;
+}
+
+.progress-mini-item .status.error {
+  color: var(--err);
+}
+
+.progress-mini-item .status.done {
+  color: var(--ok);
+}
+
+.progress-mini-item .status.warn {
+  color: var(--warn);
+}
+
+.progress-mini-item .status.running {
+  color: var(--info);
 }
 
 .link-button {

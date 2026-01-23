@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"bops/internal/logging"
+	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
 
@@ -28,6 +30,7 @@ func New(dir string) *Store {
 }
 
 func (s *Store) List() ([]Summary, error) {
+	logging.L().Debug("script list", zap.String("dir", s.Dir))
 	if err := s.ensureDir(); err != nil {
 		return nil, err
 	}
@@ -76,10 +79,12 @@ func (s *Store) List() ([]Summary, error) {
 		return items[i].UpdatedAt.After(items[j].UpdatedAt)
 	})
 
+	logging.L().Debug("script list done", zap.Int("count", len(items)))
 	return items, nil
 }
 
 func (s *Store) Get(name string) (Script, []byte, error) {
+	logging.L().Debug("script get", zap.String("name", name))
 	path, err := s.path(name)
 	if err != nil {
 		return Script{}, nil, err
@@ -98,10 +103,12 @@ func (s *Store) Get(name string) (Script, []byte, error) {
 		script.Name = name
 	}
 
+	logging.L().Debug("script get done", zap.String("name", script.Name))
 	return script, data, nil
 }
 
 func (s *Store) Put(name string, script Script) (Script, error) {
+	logging.L().Debug("script put", zap.String("name", name), zap.String("language", script.Language))
 	if err := s.ensureDir(); err != nil {
 		return Script{}, err
 	}
@@ -142,10 +149,12 @@ func (s *Store) Put(name string, script Script) (Script, error) {
 		return Script{}, err
 	}
 
+	logging.L().Debug("script put done", zap.String("name", script.Name))
 	return script, nil
 }
 
 func (s *Store) Delete(name string) error {
+	logging.L().Debug("script delete", zap.String("name", name))
 	path, err := s.path(name)
 	if err != nil {
 		return err

@@ -115,6 +115,7 @@ const showSwitch = computed(() => hasWorkflow.value);
   display: grid;
   grid-template-columns: 260px 1fr;
   min-height: 100vh;
+  height: 100vh;
 }
 
 .sidebar {
@@ -217,6 +218,8 @@ const showSwitch = computed(() => hasWorkflow.value);
   display: flex;
   flex-direction: column;
   min-width: 0;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .topbar {
@@ -269,6 +272,7 @@ const showSwitch = computed(() => hasWorkflow.value);
   flex-direction: column;
   flex: 1;
   min-height: 0;
+  overflow: auto;
 }
 
 .content > * {

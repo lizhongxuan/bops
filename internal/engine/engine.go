@@ -10,10 +10,12 @@ import (
 	"time"
 
 	"bops/internal/executor"
+	"bops/internal/logging"
 	"bops/internal/modules"
 	"bops/internal/planner"
 	"bops/internal/scheduler"
 	"bops/internal/workflow"
+	"go.uber.org/zap"
 )
 
 type Engine struct {
@@ -34,6 +36,10 @@ func (e *Engine) Plan(ctx context.Context, wf workflow.Workflow) (planner.Plan, 
 	if e.Registry == nil {
 		return planner.Plan{}, fmt.Errorf("registry is nil")
 	}
+	logging.L().Debug("engine plan start",
+		zap.String("workflow", wf.Name),
+		zap.Int("steps", len(wf.Steps)),
+	)
 
 	hosts := wf.Inventory.ResolveHosts()
 	plan := planner.Plan{
@@ -45,6 +51,10 @@ func (e *Engine) Plan(ctx context.Context, wf workflow.Workflow) (planner.Plan, 
 	for _, step := range wf.Steps {
 		shouldRun, err := evalWhen(step.When)
 		if err != nil {
+			logging.L().Debug("engine plan eval when failed",
+				zap.String("step", step.Name),
+				zap.Error(err),
+			)
 			return planner.Plan{}, err
 		}
 		if !shouldRun {
@@ -53,6 +63,10 @@ func (e *Engine) Plan(ctx context.Context, wf workflow.Workflow) (planner.Plan, 
 
 		targets, err := resolveTargets(step, hosts, wf.Inventory)
 		if err != nil {
+			logging.L().Debug("engine plan resolve targets failed",
+				zap.String("step", step.Name),
+				zap.Error(err),
+			)
 			return planner.Plan{}, err
 		}
 
@@ -85,6 +99,11 @@ func (e *Engine) Plan(ctx context.Context, wf workflow.Workflow) (planner.Plan, 
 					Vars: vars,
 				})
 				if err != nil {
+					logging.L().Debug("engine plan module check failed",
+						zap.String("step", step.Name),
+						zap.String("host", target.Name),
+						zap.Error(err),
+					)
 					return planner.Plan{}, err
 				}
 				if res.Changed {
@@ -99,10 +118,18 @@ func (e *Engine) Plan(ctx context.Context, wf workflow.Workflow) (planner.Plan, 
 		plan.Steps = append(plan.Steps, stepPlan)
 	}
 
+	logging.L().Debug("engine plan done",
+		zap.String("workflow", wf.Name),
+		zap.Int("steps", len(plan.Steps)),
+	)
 	return plan, nil
 }
 
 func (e *Engine) Apply(ctx context.Context, wf workflow.Workflow) error {
+	logging.L().Debug("engine apply start",
+		zap.String("workflow", wf.Name),
+		zap.Int("steps", len(wf.Steps)),
+	)
 	recorder := recorderFromContext(ctx)
 	env := envFromContext(ctx)
 	runner := &dispatchRunner{
@@ -116,7 +143,13 @@ func (e *Engine) Apply(ctx context.Context, wf workflow.Workflow) error {
 		Runner:   runner,
 		Observer: recorder,
 	}
-	return exec.Run(ctx, wf)
+	err := exec.Run(ctx, wf)
+	if err != nil {
+		logging.L().Debug("engine apply failed", zap.String("workflow", wf.Name), zap.Error(err))
+		return err
+	}
+	logging.L().Debug("engine apply done", zap.String("workflow", wf.Name))
+	return nil
 }
 
 type dispatchRunner struct {
@@ -132,6 +165,11 @@ func (r *dispatchRunner) Run(ctx context.Context, step workflow.Step, host workf
 	if r.dispatcher == nil {
 		return fmt.Errorf("dispatcher is nil")
 	}
+	logging.L().Debug("dispatch run",
+		zap.String("step", step.Name),
+		zap.String("action", step.Action),
+		zap.String("host", host.Name),
+	)
 	taskVars := r.injectEnv(vars)
 	result, err := r.dispatcher.Dispatch(ctx, scheduler.Task{
 		ID:   fmt.Sprintf("task-%s-%s-%d", step.Name, host.Name, time.Now().UTC().UnixNano()),
@@ -149,11 +187,25 @@ func (r *dispatchRunner) Run(ctx context.Context, step workflow.Step, host workf
 		r.mergeEnvFromOutput(result.Output)
 	}
 	if err != nil {
+		logging.L().Debug("dispatch failed",
+			zap.String("step", step.Name),
+			zap.String("host", host.Name),
+			zap.Error(err),
+		)
 		return err
 	}
 	if result.Status != "success" {
+		logging.L().Debug("dispatch result not success",
+			zap.String("step", step.Name),
+			zap.String("host", host.Name),
+			zap.String("status", result.Status),
+		)
 		return fmt.Errorf("task failed: %s", result.Error)
 	}
+	logging.L().Debug("dispatch done",
+		zap.String("step", step.Name),
+		zap.String("host", host.Name),
+	)
 	return nil
 }
 

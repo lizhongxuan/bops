@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 
+	"bops/internal/logging"
+	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )
 
@@ -27,6 +29,7 @@ func NewStore(dir string) *Store {
 }
 
 func (s *Store) List() ([]Summary, error) {
+	logging.L().Debug("validation env list", zap.String("dir", s.Dir))
 	if err := s.ensureDir(); err != nil {
 		return nil, err
 	}
@@ -73,10 +76,12 @@ func (s *Store) List() ([]Summary, error) {
 		return items[i].UpdatedAt.After(items[j].UpdatedAt)
 	})
 
+	logging.L().Debug("validation env list done", zap.Int("count", len(items)))
 	return items, nil
 }
 
 func (s *Store) Get(name string) (ValidationEnv, []byte, error) {
+	logging.L().Debug("validation env get", zap.String("name", name))
 	path, err := s.path(name)
 	if err != nil {
 		return ValidationEnv{}, nil, err
@@ -95,10 +100,12 @@ func (s *Store) Get(name string) (ValidationEnv, []byte, error) {
 		env.Name = name
 	}
 
+	logging.L().Debug("validation env get done", zap.String("name", env.Name), zap.String("type", string(env.Type)))
 	return env, data, nil
 }
 
 func (s *Store) Put(name string, env ValidationEnv) (ValidationEnv, error) {
+	logging.L().Debug("validation env put", zap.String("name", name), zap.String("type", string(env.Type)))
 	if err := s.ensureDir(); err != nil {
 		return ValidationEnv{}, err
 	}
@@ -131,10 +138,12 @@ func (s *Store) Put(name string, env ValidationEnv) (ValidationEnv, error) {
 		return ValidationEnv{}, err
 	}
 
+	logging.L().Debug("validation env put done", zap.String("name", env.Name))
 	return env, nil
 }
 
 func (s *Store) Delete(name string) error {
+	logging.L().Debug("validation env delete", zap.String("name", name))
 	path, err := s.path(name)
 	if err != nil {
 		return err

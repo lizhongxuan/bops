@@ -7,7 +7,9 @@ import (
 	"os/exec"
 	"strings"
 
+	"bops/internal/logging"
 	"bops/internal/validationenv"
+	"go.uber.org/zap"
 )
 
 type Result struct {
@@ -20,6 +22,11 @@ type Result struct {
 const remoteCommand = "cat > /tmp/bops-workflow.yaml && bops apply -f /tmp/bops-workflow.yaml"
 
 func Run(ctx context.Context, env validationenv.ValidationEnv, yaml string) (Result, error) {
+	logging.L().Debug("validation run start",
+		zap.String("env", env.Name),
+		zap.String("type", string(env.Type)),
+		zap.Int("yaml_len", len(yaml)),
+	)
 	switch env.Type {
 	case validationenv.EnvTypeContainer:
 		return runInContainer(ctx, env, yaml)
@@ -63,6 +70,10 @@ func runOverSSH(ctx context.Context, host, user, keyPath, yaml string) (Result, 
 }
 
 func runCommand(ctx context.Context, bin string, args []string, input string) (Result, error) {
+	logging.L().Debug("validation command run",
+		zap.String("bin", bin),
+		zap.Int("args", len(args)),
+	)
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Stdin = strings.NewReader(input)
 
@@ -82,8 +93,14 @@ func runCommand(ctx context.Context, bin string, args []string, input string) (R
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			result.Code = exitErr.ExitCode()
 		}
+		logging.L().Debug("validation command failed",
+			zap.String("bin", bin),
+			zap.Int("code", result.Code),
+			zap.Error(err),
+		)
 		return result, err
 	}
+	logging.L().Debug("validation command done", zap.String("bin", bin))
 	return result, nil
 }
 

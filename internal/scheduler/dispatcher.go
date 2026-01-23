@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 
+	"bops/internal/logging"
 	"bops/internal/modules"
 	"bops/internal/workflow"
+	"go.uber.org/zap"
 )
 
 type Task struct {
@@ -38,6 +40,12 @@ func (d *LocalDispatcher) Dispatch(ctx context.Context, task Task) (Result, erro
 	if d.Registry == nil {
 		return Result{}, fmt.Errorf("registry is nil")
 	}
+	logging.L().Debug("dispatch task",
+		zap.String("task_id", task.ID),
+		zap.String("step", task.Step.Name),
+		zap.String("action", task.Step.Action),
+		zap.String("host", task.Host.Name),
+	)
 	module, ok := d.Registry.Get(task.Step.Action)
 	if !ok {
 		return Result{}, fmt.Errorf("module %q not registered", task.Step.Action)
@@ -49,6 +57,10 @@ func (d *LocalDispatcher) Dispatch(ctx context.Context, task Task) (Result, erro
 		Vars: task.Vars,
 	})
 	if err != nil {
+		logging.L().Debug("dispatch task failed",
+			zap.String("task_id", task.ID),
+			zap.Error(err),
+		)
 		return Result{
 			TaskID: task.ID,
 			Status: "failed",

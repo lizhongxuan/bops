@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 
+	"bops/internal/logging"
 	"github.com/cloudwego/eino/compose"
+	"go.uber.org/zap"
 )
 
 type Pipeline struct {
@@ -38,6 +40,11 @@ func (p *Pipeline) RunGenerate(ctx context.Context, prompt string, context map[s
 	if p.generateRunner == nil {
 		return nil, errors.New("generate pipeline is not initialized")
 	}
+	logging.L().Debug("aiworkflow generate invoke",
+		zap.Int("prompt_len", len(prompt)),
+		zap.Int("context_items", len(context)),
+		zap.Int("max_retries", pickMaxRetries(opts.MaxRetries, p.cfg.MaxRetries)),
+	)
 	state := &State{
 		Mode:          ModeGenerate,
 		Prompt:        prompt,
@@ -48,6 +55,7 @@ func (p *Pipeline) RunGenerate(ctx context.Context, prompt string, context map[s
 		ValidationEnv: opts.ValidationEnv,
 		SkipExecute:   opts.SkipExecute,
 		EventSink:     opts.EventSink,
+		StreamSink:    opts.StreamSink,
 	}
 	return p.generateRunner.Invoke(ctx, state)
 }
@@ -56,6 +64,11 @@ func (p *Pipeline) RunFix(ctx context.Context, yaml string, issues []string, opt
 	if p.fixRunner == nil {
 		return nil, errors.New("fix pipeline is not initialized")
 	}
+	logging.L().Debug("aiworkflow fix invoke",
+		zap.Int("yaml_len", len(yaml)),
+		zap.Int("issues", len(issues)),
+		zap.Int("max_retries", pickMaxRetries(opts.MaxRetries, p.cfg.MaxRetries)),
+	)
 	state := &State{
 		Mode:          ModeFix,
 		YAML:          yaml,
@@ -66,6 +79,7 @@ func (p *Pipeline) RunFix(ctx context.Context, yaml string, issues []string, opt
 		ValidationEnv: opts.ValidationEnv,
 		SkipExecute:   opts.SkipExecute,
 		EventSink:     opts.EventSink,
+		StreamSink:    opts.StreamSink,
 	}
 	return p.fixRunner.Invoke(ctx, state)
 }

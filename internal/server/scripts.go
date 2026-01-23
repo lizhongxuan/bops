@@ -23,13 +23,13 @@ type scriptRequest struct {
 
 func (s *Server) handleScripts(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		writeError(w, r, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 
 	items, err := s.scriptStore.List()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeError(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 
@@ -54,7 +54,7 @@ func (s *Server) handleScript(w http.ResponseWriter, r *http.Request) {
 	path := strings.TrimPrefix(r.URL.Path, "/api/scripts/")
 	name := strings.Trim(path, "/")
 	if name == "" {
-		writeError(w, http.StatusNotFound, "script name is required")
+		writeError(w, r, http.StatusNotFound, "script name is required")
 		return
 	}
 
@@ -62,19 +62,19 @@ func (s *Server) handleScript(w http.ResponseWriter, r *http.Request) {
 	case http.MethodGet:
 		script, _, err := s.scriptStore.Get(name)
 		if err != nil {
-			writeError(w, http.StatusNotFound, err.Error())
+			writeError(w, r, http.StatusNotFound, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, script)
 	case http.MethodPut:
 		body, err := readBody(r)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
 		var req scriptRequest
 		if err := json.Unmarshal(body, &req); err != nil {
-			writeError(w, http.StatusBadRequest, "invalid json payload")
+			writeError(w, r, http.StatusBadRequest, "invalid json payload")
 			return
 		}
 		if strings.TrimSpace(req.Name) == "" {
@@ -88,17 +88,17 @@ func (s *Server) handleScript(w http.ResponseWriter, r *http.Request) {
 			Content:     req.Content,
 		})
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, script)
 	case http.MethodDelete:
 		if err := s.scriptStore.Delete(name); err != nil {
-			writeError(w, http.StatusNotFound, err.Error())
+			writeError(w, r, http.StatusNotFound, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 	default:
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		writeError(w, r, http.StatusMethodNotAllowed, "method not allowed")
 	}
 }

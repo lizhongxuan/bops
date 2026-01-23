@@ -7,14 +7,17 @@ import (
 	"strings"
 
 	"bops/internal/ai"
+	"bops/internal/logging"
 	"bops/internal/validationrun"
 	"bops/internal/workflow"
+	"go.uber.org/zap"
 )
 
 func (p *Pipeline) inputNormalize(_ context.Context, state *State) (*State, error) {
 	if state == nil {
 		return nil, errors.New("state is required")
 	}
+	logging.L().Debug("aiworkflow normalize start")
 	emitEvent(state, "normalize", "start", "")
 	state.Prompt = strings.TrimSpace(state.Prompt)
 	state.ContextText = strings.TrimSpace(state.ContextText)
@@ -38,6 +41,11 @@ func (p *Pipeline) inputNormalize(_ context.Context, state *State) (*State, erro
 		return state, err
 	}
 	emitEvent(state, "normalize", "done", "")
+	logging.L().Debug("aiworkflow normalize done",
+		zap.String("mode", string(state.Mode)),
+		zap.Int("prompt_len", len(state.Prompt)),
+		zap.Int("yaml_len", len(state.YAML)),
+	)
 	return state, nil
 }
 
@@ -45,6 +53,7 @@ func (p *Pipeline) generate(ctx context.Context, state *State) (*State, error) {
 	if state.Mode != ModeGenerate {
 		return state, nil
 	}
+	logging.L().Debug("aiworkflow generate start")
 	emitEvent(state, "generator", "start", "")
 	if p.cfg.Client == nil {
 		err := errors.New("ai client is not configured")
@@ -56,10 +65,14 @@ func (p *Pipeline) generate(ctx context.Context, state *State) (*State, error) {
 		{Role: "system", Content: state.SystemPrompt},
 		{Role: "user", Content: prompt},
 	}
-	reply, err := p.cfg.Client.Chat(ctx, messages)
+	reply, thought, err := p.chatWithThought(ctx, messages, state.StreamSink)
 	if err != nil {
 		emitEvent(state, "generator", "error", err.Error())
 		return state, err
+	}
+	state.Thought = strings.TrimSpace(thought)
+	if state.Thought != "" {
+		logging.L().Debug("aiworkflow generate thought captured", zap.Int("thought_len", len(state.Thought)))
 	}
 	yamlText, questions, err := extractWorkflowYAML(reply)
 	if err != nil {
@@ -69,10 +82,15 @@ func (p *Pipeline) generate(ctx context.Context, state *State) (*State, error) {
 	state.YAML = yamlText
 	state.Questions = mergeQuestions(state.Questions, questions)
 	emitEvent(state, "generator", "done", "")
+	logging.L().Debug("aiworkflow generate done",
+		zap.Int("yaml_len", len(state.YAML)),
+		zap.Int("questions", len(state.Questions)),
+	)
 	return state, nil
 }
 
 func (p *Pipeline) fix(ctx context.Context, state *State) (*State, error) {
+	logging.L().Debug("aiworkflow fix start", zap.Int("issues", len(state.Issues)))
 	emitEvent(state, "fixer", "start", "")
 	if p.cfg.Client == nil {
 		err := errors.New("ai client is not configured")
@@ -92,10 +110,14 @@ func (p *Pipeline) fix(ctx context.Context, state *State) (*State, error) {
 		{Role: "system", Content: state.SystemPrompt},
 		{Role: "user", Content: prompt},
 	}
-	reply, err := p.cfg.Client.Chat(ctx, messages)
+	reply, thought, err := p.chatWithThought(ctx, messages, state.StreamSink)
 	if err != nil {
 		emitEvent(state, "fixer", "error", err.Error())
 		return state, err
+	}
+	state.Thought = strings.TrimSpace(thought)
+	if state.Thought != "" {
+		logging.L().Debug("aiworkflow fix thought captured", zap.Int("thought_len", len(state.Thought)))
 	}
 	yamlText, questions, err := extractWorkflowYAML(reply)
 	if err != nil {
@@ -109,10 +131,16 @@ func (p *Pipeline) fix(ctx context.Context, state *State) (*State, error) {
 	state.Questions = mergeQuestions(state.Questions, questions)
 	state.RetryCount++
 	emitEvent(state, "fixer", "done", "")
+	logging.L().Debug("aiworkflow fix done",
+		zap.Int("yaml_len", len(state.YAML)),
+		zap.Int("questions", len(state.Questions)),
+		zap.Int("retries", state.RetryCount),
+	)
 	return state, nil
 }
 
 func (p *Pipeline) validate(_ context.Context, state *State) (*State, error) {
+	logging.L().Debug("aiworkflow validate start", zap.Int("yaml_len", len(state.YAML)))
 	emitEvent(state, "validator", "start", "")
 	trimmed := strings.TrimSpace(state.YAML)
 	if trimmed == "" {
@@ -145,10 +173,12 @@ func (p *Pipeline) validate(_ context.Context, state *State) (*State, error) {
 	}
 	state.Issues = nil
 	emitEvent(state, "validator", "done", "")
+	logging.L().Debug("aiworkflow validate done")
 	return state, nil
 }
 
 func (p *Pipeline) safetyCheck(_ context.Context, state *State) (*State, error) {
+	logging.L().Debug("aiworkflow safety start")
 	emitEvent(state, "safety", "start", "")
 	level, notes := EvaluateRisk(state.YAML, p.cfg.RiskRules)
 	state.RiskLevel = level
@@ -160,6 +190,7 @@ func (p *Pipeline) safetyCheck(_ context.Context, state *State) (*State, error) 
 		}
 	}
 	emitEvent(state, "safety", "done", fmt.Sprintf("risk=%s", state.RiskLevel))
+	logging.L().Debug("aiworkflow safety done", zap.String("risk_level", string(state.RiskLevel)))
 	return state, nil
 }
 
@@ -170,6 +201,10 @@ func (p *Pipeline) execute(ctx context.Context, state *State) (*State, error) {
 		emitEvent(state, "executor", "skipped", "execution skipped")
 		return state, nil
 	}
+	logging.L().Debug("aiworkflow execute start",
+		zap.String("env", state.ValidationEnv.Name),
+		zap.String("env_type", string(state.ValidationEnv.Type)),
+	)
 	emitEvent(state, "executor", "start", "")
 	result, err := validationrun.Runner(ctx, *state.ValidationEnv, state.YAML)
 	state.ExecutionResult = &result
@@ -185,24 +220,29 @@ func (p *Pipeline) execute(ctx context.Context, state *State) (*State, error) {
 	}
 	state.IsSuccess = true
 	emitEvent(state, "executor", "done", "")
+	logging.L().Debug("aiworkflow execute done", zap.String("status", result.Status))
 	return state, nil
 }
 
 func (p *Pipeline) summarize(_ context.Context, state *State) (*State, error) {
+	logging.L().Debug("aiworkflow summarize start")
 	emitEvent(state, "summarizer", "start", "")
 	steps := countSteps(state.YAML)
 	issues := len(state.Issues)
 	state.Summary = fmt.Sprintf("steps=%d risk=%s issues=%d", steps, state.RiskLevel, issues)
 	emitEvent(state, "summarizer", "done", state.Summary)
+	logging.L().Debug("aiworkflow summarize done", zap.String("summary", state.Summary))
 	return state, nil
 }
 
 func (p *Pipeline) humanGate(_ context.Context, state *State) (*State, error) {
+	logging.L().Debug("aiworkflow human gate start")
 	emitEvent(state, "human_gate", "start", "")
 	if state.RiskLevel != RiskLevelLow || len(state.Issues) > 0 || !state.IsSuccess {
 		state.NeedsReview = true
 	}
 	emitEvent(state, "human_gate", "done", "")
+	logging.L().Debug("aiworkflow human gate done", zap.Bool("needs_review", state.NeedsReview))
 	return state, nil
 }
 
@@ -215,6 +255,26 @@ func emitEvent(state *State, node, status, message string) {
 		Status:  status,
 		Message: message,
 	})
+}
+
+func (p *Pipeline) chatWithThought(ctx context.Context, messages []ai.Message, sink StreamSink) (string, string, error) {
+	if p.cfg.Client == nil {
+		return "", "", errors.New("ai client is not configured")
+	}
+	if sink != nil {
+		if client, ok := p.cfg.Client.(ai.StreamClient); ok {
+			return client.ChatStream(ctx, messages, func(delta ai.StreamDelta) {
+				if sink != nil {
+					sink(delta)
+				}
+			})
+		}
+	}
+	if client, ok := p.cfg.Client.(ai.ThoughtClient); ok {
+		return client.ChatWithThought(ctx, messages)
+	}
+	reply, err := p.cfg.Client.Chat(ctx, messages)
+	return reply, "", err
 }
 
 func countSteps(yamlText string) int {

@@ -33,13 +33,13 @@ func (s *Server) handleAISettings(w http.ResponseWriter, r *http.Request) {
 	case http.MethodPut:
 		body, err := readBody(r)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
 		var req aiSettingsRequest
 		if len(body) > 0 {
 			if err := json.Unmarshal(body, &req); err != nil {
-				writeError(w, http.StatusBadRequest, "invalid json payload")
+				writeError(w, r, http.StatusBadRequest, "invalid json payload")
 				return
 			}
 		}
@@ -62,14 +62,14 @@ func (s *Server) handleAISettings(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err := config.Save(s.configPath, s.cfg); err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			writeError(w, r, http.StatusInternalServerError, err.Error())
 			return
 		}
 		s.applyAIConfig()
 		writeJSON(w, http.StatusOK, s.buildAISettingsResponse())
 		return
 	default:
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		writeError(w, r, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
 }

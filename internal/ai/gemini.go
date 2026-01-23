@@ -9,6 +9,9 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"bops/internal/logging"
+	"go.uber.org/zap"
 )
 
 type geminiClient struct {
@@ -38,6 +41,8 @@ type geminiResponse struct {
 	} `json:"candidates"`
 }
 
+const geminiRequestTimeout = 90 * time.Second
+
 func newGeminiClient(cfg Config) *geminiClient {
 	base := strings.TrimSpace(cfg.BaseURL)
 	if base == "" {
@@ -51,7 +56,7 @@ func newGeminiClient(cfg Config) *geminiClient {
 		apiKey:  cfg.APIKey,
 		baseURL: strings.TrimRight(base, "/"),
 		model:   model,
-		http:    &http.Client{Timeout: 45 * time.Second},
+		http:    &http.Client{Timeout: geminiRequestTimeout},
 	}
 }
 
@@ -59,6 +64,11 @@ func (c *geminiClient) Chat(ctx context.Context, messages []Message) (string, er
 	if strings.TrimSpace(c.apiKey) == "" {
 		return "", fmt.Errorf("ai api key is required")
 	}
+	logging.L().Debug("ai chat request",
+		zap.String("provider", "gemini"),
+		zap.String("model", c.model),
+		zap.Int("messages", len(messages)),
+	)
 	prompt := flattenMessages(messages)
 	payload := geminiRequest{
 		Contents: []geminiContent{{Parts: []geminiPart{{Text: prompt}}}},
@@ -98,7 +108,12 @@ func (c *geminiClient) Chat(ctx context.Context, messages []Message) (string, er
 		return "", fmt.Errorf("ai response missing candidates")
 	}
 
-	return parsed.Candidates[0].Content.Parts[0].Text, nil
+	text := parsed.Candidates[0].Content.Parts[0].Text
+	logging.L().Debug("ai chat response",
+		zap.String("provider", "gemini"),
+		zap.Int("content_len", len(text)),
+	)
+	return text, nil
 }
 
 func flattenMessages(messages []Message) string {

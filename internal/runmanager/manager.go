@@ -8,8 +8,10 @@ import (
 
 	"bops/internal/core"
 	"bops/internal/eventbus"
+	"bops/internal/logging"
 	"bops/internal/state"
 	"bops/internal/workflow"
+	"go.uber.org/zap"
 )
 
 type Manager struct {
@@ -39,6 +41,7 @@ func NewWithBus(store state.Store, bus *eventbus.Bus) *Manager {
 func (m *Manager) StartRun(ctx context.Context, wf workflow.Workflow) (string, context.Context, error) {
 	runID := fmt.Sprintf("run-%d", time.Now().UTC().UnixNano())
 	runCtx, cancel := context.WithCancel(ctx)
+	logging.L().Debug("run start", zap.String("run_id", runID), zap.String("workflow", wf.Name))
 
 	run := state.RunState{
 		RunID:           runID,
@@ -52,6 +55,7 @@ func (m *Manager) StartRun(ctx context.Context, wf workflow.Workflow) (string, c
 
 	if err := m.appendRun(run); err != nil {
 		cancel()
+		logging.L().Debug("run append failed", zap.String("run_id", runID), zap.Error(err))
 		return "", nil, err
 	}
 
@@ -67,6 +71,7 @@ func (m *Manager) StartRun(ctx context.Context, wf workflow.Workflow) (string, c
 }
 
 func (m *Manager) FinishRun(runID string, runErr error) error {
+	logging.L().Debug("run finish", zap.String("run_id", runID), zap.Error(runErr))
 	m.mu.Lock()
 	if ctx, ok := m.active[runID]; ok {
 		delete(m.active, runID)
@@ -110,6 +115,7 @@ func (m *Manager) CancelRun(runID string) bool {
 }
 
 func (m *Manager) StopRun(runID string) error {
+	logging.L().Debug("run stop", zap.String("run_id", runID))
 	m.mu.Lock()
 	if ctx, ok := m.active[runID]; ok {
 		delete(m.active, runID)

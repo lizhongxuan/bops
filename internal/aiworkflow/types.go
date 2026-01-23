@@ -42,6 +42,7 @@ type State struct {
 	RiskNotes        []string
 	RetryCount       int
 	MaxRetries       int
+	Thought          string
 	SkipExecute      bool
 	ExecutionSkipped bool
 	ExecutionResult  *validationrun.Result
@@ -52,6 +53,7 @@ type State struct {
 	NeedsReview      bool
 	History          []string
 	EventSink        EventSink
+	StreamSink       StreamSink
 }
 
 type Config struct {
@@ -68,6 +70,7 @@ type RunOptions struct {
 	SkipExecute   bool
 	MaxRetries    int
 	EventSink     EventSink
+	StreamSink    StreamSink
 }
 
 type Event struct {
@@ -77,3 +80,5 @@ type Event struct {
 }
 
 type EventSink func(Event)
+
+type StreamSink func(ai.StreamDelta)

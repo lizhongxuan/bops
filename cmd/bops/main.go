@@ -10,6 +10,7 @@ import (
 
 	"bops/internal/config"
 	"bops/internal/engine"
+	"bops/internal/logging"
 	"bops/internal/modules"
 	"bops/internal/modules/cmd"
 	"bops/internal/modules/envset"
@@ -22,6 +23,7 @@ import (
 	"bops/internal/server"
 	"bops/internal/state"
 	"bops/internal/workflow"
+	"go.uber.org/zap"
 )
 
 func main() {
@@ -29,6 +31,8 @@ func main() {
 		usage()
 		os.Exit(2)
 	}
+
+	_, _ = logging.Init(config.DefaultConfig())
 
 	switch os.Args[1] {
 	case "plan":
@@ -67,6 +71,7 @@ func runPlan(args []string) error {
 		return fmt.Errorf("workflow file is required")
 	}
 
+	logging.L().Debug("plan start", zap.String("file", *file))
 	wf, err := loadWorkflow(*file)
 	if err != nil {
 		return err
@@ -93,6 +98,7 @@ func runApply(args []string) error {
 		return fmt.Errorf("workflow file is required")
 	}
 
+	logging.L().Debug("apply start", zap.String("file", *file))
 	wf, err := loadWorkflow(*file)
 	if err != nil {
 		return err
@@ -116,6 +122,7 @@ func runTest(args []string) error {
 		return fmt.Errorf("workflow file is required")
 	}
 
+	logging.L().Debug("test plan start", zap.String("file", *file))
 	wf, err := loadWorkflow(*file)
 	if err != nil {
 		return err
@@ -140,6 +147,8 @@ func runStatus(args []string) error {
 		return err
 	}
 
+	_, _ = logging.Init(cfg)
+	logging.L().Debug("status requested")
 	store := state.NewFileStore(cfg.StatePath)
 	data, err := store.Load()
 	if err != nil {
@@ -166,9 +175,17 @@ func runServe(args []string) error {
 	if err != nil {
 		return err
 	}
+	_, _ = logging.Init(cfg)
+	logging.L().Info("server starting",
+		zap.String("listen", cfg.ServerListen),
+		zap.String("static_dir", cfg.StaticDir),
+		zap.Strings("cors_origins", cfg.CORSOrigins),
+		zap.String("ai_provider", cfg.AIProvider),
+		zap.String("ai_model", cfg.AIModel),
+		zap.String("config_path", resolvedPath),
+	)
 
 	srv := server.New(cfg, resolvedPath)
-	fmt.Printf("bops server listening on %s\n", cfg.ServerListen)
 	return srv.ListenAndServe()
 }
 
@@ -214,6 +231,7 @@ func usage() {
 }
 
 func fatal(err error) {
+	logging.L().Error("command failed", zap.Error(err))
 	fmt.Fprintln(os.Stderr, err)
 	os.Exit(1)
 }
