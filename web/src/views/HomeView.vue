@@ -12,7 +12,7 @@
           </div>
         </div>
 
-        <div class="chat-body">
+        <div class="chat-body" ref="chatBodyRef" @scroll="handleChatScroll">
           <ul class="timeline">
             <li v-for="entry in timelineEntries" :key="entry.id" :class="['timeline-item', entry.type]">
               <div class="timeline-header">
@@ -701,6 +701,8 @@ const chatEntries = ref<ChatEntry[]>([
   }
 ]);
 const chatPending = ref(false);
+const chatBodyRef = ref<HTMLElement | null>(null);
+const chatAutoScroll = ref(true);
 const liveThoughtEntryId = ref<string | null>(null);
 const liveThoughtText = ref("");
 const liveAnswerEntryId = ref<string | null>(null);
@@ -813,6 +815,7 @@ const canShowIssues = computed(() => !syncBlocked.value);
 
 let chatIndex = 0;
 let summaryTimer: number | null = null;
+let chatScrollScheduled = false;
 watch(
   yaml,
   (next, prev) => {
@@ -848,6 +851,16 @@ watch(aiDisplayName, (next) => {
 watch(saveName, () => {
   if (saveError.value) {
     saveError.value = "";
+  }
+});
+
+watch(chatEntries, () => {
+  scheduleChatScroll();
+});
+
+watch(chatPending, (next) => {
+  if (next) {
+    scheduleChatScroll();
   }
 });
 
@@ -1012,6 +1025,35 @@ function stopAnswerStream() {
   liveAnswerEntryId.value = null;
 }
 
+function handleChatScroll() {
+  updateChatAutoScroll();
+}
+
+function updateChatAutoScroll() {
+  const el = chatBodyRef.value;
+  if (!el) return;
+  const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+  chatAutoScroll.value = distance <= 40;
+}
+
+function scrollChatToBottom(force = false) {
+  const el = chatBodyRef.value;
+  if (!el) return;
+  if (!force && !chatAutoScroll.value) return;
+  el.scrollTop = el.scrollHeight;
+  chatAutoScroll.value = true;
+}
+
+function scheduleChatScroll(force = false) {
+  if (!force && !chatAutoScroll.value) return;
+  if (chatScrollScheduled) return;
+  chatScrollScheduled = true;
+  window.requestAnimationFrame(() => {
+    chatScrollScheduled = false;
+    scrollChatToBottom(force);
+  });
+}
+
 function setChatEntriesFromSession(session: ChatSession) {
   const messages = Array.isArray(session.messages) ? session.messages : [];
   if (!messages.length) {
@@ -1023,6 +1065,8 @@ function setChatEntriesFromSession(session: ChatSession) {
         type: "ai"
       }
     ];
+    chatAutoScroll.value = true;
+    void nextTick(() => scrollChatToBottom(true));
     return;
   }
   chatEntries.value = messages.map((msg, index) => ({
@@ -1031,6 +1075,8 @@ function setChatEntriesFromSession(session: ChatSession) {
     body: msg.content,
     type: msg.role === "user" ? "user" : "ai"
   }));
+  chatAutoScroll.value = true;
+  void nextTick(() => scrollChatToBottom(true));
 }
 
 async function loadChatSessions() {
