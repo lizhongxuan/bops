@@ -34,6 +34,7 @@ type State struct {
 	Context          map[string]any
 	ContextText      string
 	SystemPrompt     string
+	BaseYAML         string
 	YAML             string
 	Questions        []string
 	Intent           *Intent
@@ -71,6 +72,7 @@ type RunOptions struct {
 	MaxRetries    int
 	EventSink     EventSink
 	StreamSink    StreamSink
+	BaseYAML      string
 }
 
 type Event struct {

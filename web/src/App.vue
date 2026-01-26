@@ -30,6 +30,7 @@ const hideTopbarTitle = computed(() =>
 );
 
 const showTopbarTitle = computed(() => !hideTopbarTitle.value);
+const showTopbar = computed(() => showTopbarTitle.value || showSwitch.value);
 
 const pageTitle = computed(() => {
   if (hasWorkflow.value) return activeWorkflow.value;
@@ -88,7 +89,7 @@ const showSwitch = computed(() => hasWorkflow.value);
     </aside>
 
     <div class="main">
-      <header class="topbar">
+      <header v-if="showTopbar" class="topbar">
         <div v-if="showTopbarTitle">
           <div class="title">{{ pageTitle }}</div>
           <div v-if="showMeta" class="meta">
@@ -222,12 +223,12 @@ const showSwitch = computed(() => hasWorkflow.value);
   overflow: hidden;
 }
 
-.topbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 24px 32px 16px;
-}
+  .topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 24px 32px 16px;
+  }
 
 .title {
   font-family: "Space Grotesk", sans-serif;
@@ -267,7 +268,7 @@ const showSwitch = computed(() => hasWorkflow.value);
 }
 
 .content {
-  padding: 0 32px 48px;
+  padding: 16px 16px 16px;
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -294,6 +295,15 @@ const showSwitch = computed(() => hasWorkflow.value);
     height: auto;
     border-right: none;
     border-bottom: 1px solid var(--grid);
+    padding: 18px 16px;
+  }
+
+  .topbar {
+    padding: 14px 16px 10px;
+  }
+
+  .content {
+    padding: 16px 16px 16px;
   }
 }
 </style>

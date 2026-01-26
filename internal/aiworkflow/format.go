@@ -5,14 +5,24 @@ import (
 	"strings"
 
 	"bops/internal/ai"
+	"bops/internal/workflow"
 )
 
-func buildGeneratePrompt(prompt, contextText string) string {
+func buildGeneratePrompt(prompt, contextText, baseYAML string) string {
 	builder := strings.Builder{}
 	if contextText != "" {
 		builder.WriteString("Context:\n")
 		builder.WriteString(contextText)
 		builder.WriteString("\n\n")
+	}
+	trimmedBase := strings.TrimSpace(baseYAML)
+	if trimmedBase != "" {
+		builder.WriteString("Existing workflow YAML:\n")
+		builder.WriteString(trimmedBase)
+		builder.WriteString("\n\n")
+		builder.WriteString("Update the existing YAML based on the user request.\n")
+		builder.WriteString("Only modify the steps section. Do not change any other fields.\n")
+		builder.WriteString("If steps already exist, edit or append to them instead of creating a brand new workflow.\n\n")
 	}
 	builder.WriteString("User request:\n")
 	builder.WriteString(prompt)
@@ -33,6 +43,7 @@ func buildFixPrompt(yamlText string, issues []string, lastError string) string {
 	builder.WriteString("Fix the YAML below and return JSON only with top-level keys: workflow, questions.\n")
 	builder.WriteString("workflow must include: version, name, description, inventory, plan, steps.\n")
 	builder.WriteString("Steps must include name/action/with and must not include targets.\n")
+	builder.WriteString("Only modify steps. Do not change any other fields.\n")
 	builder.WriteString("Allowed actions: ")
 	builder.WriteString(allowedActionText())
 	builder.WriteString(".\n\n")
@@ -75,6 +86,32 @@ func extractWorkflowYAML(reply string) (string, []string, error) {
 		return "", nil, errors.New("unable to extract yaml")
 	}
 	return normalizeWorkflowYAML(fallback), nil, nil
+}
+
+func mergeStepsIntoBase(baseYAML, updatedYAML string) string {
+	trimmedBase := strings.TrimSpace(baseYAML)
+	trimmedUpdated := strings.TrimSpace(updatedYAML)
+	if trimmedBase == "" {
+		return trimmedUpdated
+	}
+	if trimmedUpdated == "" {
+		return trimmedBase
+	}
+	baseWorkflow, err := workflow.Load([]byte(trimmedBase))
+	if err != nil {
+		return trimmedUpdated
+	}
+	updatedWorkflow, err := workflow.Load([]byte(trimmedUpdated))
+	if err != nil {
+		return trimmedUpdated
+	}
+	updatedWorkflow = normalizeWorkflow(updatedWorkflow)
+	baseWorkflow.Steps = updatedWorkflow.Steps
+	out, err := marshalWorkflowYAML(baseWorkflow)
+	if err != nil {
+		return trimmedUpdated
+	}
+	return out
 }
 
 func extractJSONBlock(text string) string {

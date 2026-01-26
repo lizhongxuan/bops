@@ -51,6 +51,7 @@ func (p *Pipeline) RunGenerate(ctx context.Context, prompt string, context map[s
 		Context:       context,
 		ContextText:   opts.ContextText,
 		SystemPrompt:  pickSystemPrompt(opts.SystemPrompt, p.cfg.SystemPrompt),
+		BaseYAML:      opts.BaseYAML,
 		MaxRetries:    pickMaxRetries(opts.MaxRetries, p.cfg.MaxRetries),
 		ValidationEnv: opts.ValidationEnv,
 		SkipExecute:   opts.SkipExecute,

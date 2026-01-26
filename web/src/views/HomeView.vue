@@ -19,7 +19,13 @@
                 <span class="timeline-badge" :class="entry.type">{{ entry.label }}</span>
                 <small v-if="entry.extra">{{ entry.extra }}</small>
               </div>
-              <p v-if="entry.body">{{ entry.body }}</p>
+              <div v-if="entry.type === 'thinking'" class="thinking-content">
+                <details class="thinking-toggle">
+                  <summary>思考过程</summary>
+                  <p v-if="entry.body">{{ entry.body }}</p>
+                </details>
+              </div>
+              <p v-else-if="entry.body">{{ entry.body }}</p>
               <div v-if="entry.actionLabel" class="timeline-actions">
                 <button class="btn ghost btn-sm" type="button" @click="handleEntryAction(entry.action)">
                   {{ entry.actionLabel }}
@@ -2350,6 +2356,8 @@ async function startStream() {
   streamError.value = "";
   progressEvents.value = [];
   executeResult.value = null;
+  const currentYaml = stripTargetsFromYaml(getVisualYaml()).trim();
+  const baseYaml = steps.value.length ? currentYaml : "";
   const payload = {
     mode: "generate",
     prompt: message,
@@ -2357,7 +2365,8 @@ async function startStream() {
     env: selectedValidationEnv.value || undefined,
     execute: executeEnabled.value,
     max_retries: maxRetries.value,
-    draft_id: draftId.value || undefined
+    draft_id: draftId.value || undefined,
+    yaml: baseYaml || undefined
   };
   try {
     await streamWorkflow(payload);
@@ -2993,8 +3002,8 @@ function diffSummary(prev: string, next: string) {
 
 .timeline-item.thinking {
   align-self: flex-start;
-  background: rgba(46, 111, 227, 0.08);
-  border-color: rgba(46, 111, 227, 0.2);
+  background: rgba(46, 111, 227, 0.04);
+  border-color: rgba(46, 111, 227, 0.12);
 }
 
 .timeline-item.warn {
@@ -3007,6 +3016,24 @@ function diffSummary(prev: string, next: string) {
   align-self: flex-start;
   background: rgba(208, 52, 44, 0.12);
   border-color: rgba(208, 52, 44, 0.2);
+}
+
+.thinking-toggle {
+  border-radius: 10px;
+  padding: 6px 8px;
+  background: rgba(46, 111, 227, 0.04);
+  border: 1px dashed rgba(46, 111, 227, 0.12);
+}
+
+.thinking-toggle summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.thinking-toggle[open] summary {
+  color: #3c6fd6;
+  margin-bottom: 6px;
 }
 
 .timeline-item.typing {
@@ -4027,9 +4054,37 @@ textarea {
 }
 
 @media (max-width: 980px) {
+  .home-ai {
+    padding: 8px;
+    gap: 12px;
+  }
+
   .main-grid {
     grid-template-columns: 1fr;
     grid-template-rows: auto;
+    gap: 8px;
+  }
+
+  .panel {
+    padding: 12px;
+    border-radius: 14px;
+    gap: 10px;
+  }
+
+  .panel-head h2 {
+    font-size: 16px;
+  }
+
+  .panel-head p {
+    font-size: 12px;
+  }
+
+  .chat-panel {
+    min-height: 60vh;
+  }
+
+  .composer {
+    gap: 10px;
   }
 
   .visual-grid {
@@ -4042,6 +4097,10 @@ textarea {
 
   .form-grid {
     grid-template-columns: 1fr;
+  }
+
+  .timeline-item {
+    max-width: 88%;
   }
 }
 </style>

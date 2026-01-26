@@ -60,7 +60,7 @@ func (p *Pipeline) generate(ctx context.Context, state *State) (*State, error) {
 		emitEvent(state, "generator", "error", err.Error())
 		return state, err
 	}
-	prompt := buildGeneratePrompt(state.Prompt, state.ContextText)
+	prompt := buildGeneratePrompt(state.Prompt, state.ContextText, state.BaseYAML)
 	messages := []ai.Message{
 		{Role: "system", Content: state.SystemPrompt},
 		{Role: "user", Content: prompt},
@@ -78,6 +78,9 @@ func (p *Pipeline) generate(ctx context.Context, state *State) (*State, error) {
 	if err != nil {
 		emitEvent(state, "generator", "error", err.Error())
 		return state, err
+	}
+	if strings.TrimSpace(state.BaseYAML) != "" {
+		yamlText = mergeStepsIntoBase(state.BaseYAML, yamlText)
 	}
 	state.YAML = yamlText
 	state.Questions = mergeQuestions(state.Questions, questions)
@@ -123,6 +126,9 @@ func (p *Pipeline) fix(ctx context.Context, state *State) (*State, error) {
 	if err != nil {
 		emitEvent(state, "fixer", "error", err.Error())
 		return state, err
+	}
+	if strings.TrimSpace(state.BaseYAML) != "" {
+		yamlText = mergeStepsIntoBase(state.BaseYAML, yamlText)
 	}
 	if strings.TrimSpace(yamlText) != "" {
 		state.History = append(state.History, state.YAML)

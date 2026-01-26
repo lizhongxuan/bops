@@ -48,6 +48,7 @@ type aiGenerateRequest struct {
 	Prompt  string         `json:"prompt"`
 	Context map[string]any `json:"context,omitempty"`
 	DraftID string         `json:"draft_id,omitempty"`
+	YAML    string         `json:"yaml,omitempty"`
 }
 
 type aiGenerateResponse struct {
@@ -276,11 +277,16 @@ func (s *Server) handleAIWorkflowGenerate(w http.ResponseWriter, r *http.Request
 	}
 
 	contextText := s.buildContextText(req.Context)
+	baseYAML := strings.TrimSpace(req.YAML)
+	if baseYAML != "" && countStepsInYAML(baseYAML) == 0 {
+		baseYAML = ""
+	}
 	state, err := s.aiWorkflow.RunGenerate(r.Context(), strings.TrimSpace(req.Prompt), req.Context, aiworkflow.RunOptions{
 		SystemPrompt:  s.systemPrompt(contextText),
 		ContextText:   contextText,
 		ValidationEnv: s.defaultValidationEnv(),
 		SkipExecute:   true,
+		BaseYAML:      baseYAML,
 	})
 	if err != nil {
 		writeError(w, r, http.StatusBadRequest, err.Error())
@@ -320,10 +326,12 @@ func (s *Server) handleAIWorkflowFix(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	baseYAML := strings.TrimSpace(req.YAML)
 	state, err := s.aiWorkflow.RunFix(r.Context(), req.YAML, req.Issues, aiworkflow.RunOptions{
 		SystemPrompt:  s.systemPrompt(""),
 		ValidationEnv: s.defaultValidationEnv(),
 		SkipExecute:   true,
+		BaseYAML:      baseYAML,
 	})
 	if err != nil {
 		writeError(w, r, http.StatusBadRequest, err.Error())
@@ -584,6 +592,10 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 	}
 
 	contextText := s.buildContextText(req.Context)
+	baseYAML := strings.TrimSpace(req.YAML)
+	if baseYAML != "" && countStepsInYAML(baseYAML) == 0 {
+		baseYAML = ""
+	}
 	opts := aiworkflow.RunOptions{
 		SystemPrompt:  s.systemPrompt(contextText),
 		ContextText:   contextText,
@@ -592,6 +604,7 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 		MaxRetries:    req.MaxRetries,
 		EventSink:     sink,
 		StreamSink:    streamSink,
+		BaseYAML:      baseYAML,
 	}
 
 	go func() {
