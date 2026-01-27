@@ -3,7 +3,9 @@ package server
 import (
 	"encoding/json"
 	"fmt"
+	"html"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -108,6 +110,18 @@ type aiStreamRequest struct {
 	Execute    bool           `json:"execute,omitempty"`
 	MaxRetries int            `json:"max_retries,omitempty"`
 	DraftID    string         `json:"draft_id,omitempty"`
+}
+
+type uiResource struct {
+	Type     string         `json:"type"`
+	Resource uiResourceBody `json:"resource"`
+}
+
+type uiResourceBody struct {
+	URI      string `json:"uri"`
+	MimeType string `json:"mimeType"`
+	Text     string `json:"text,omitempty"`
+	Blob     string `json:"blob,omitempty"`
 }
 
 func (s *Server) handleAIChatSessions(w http.ResponseWriter, r *http.Request) {
@@ -693,6 +707,9 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 				"history":      pending.state.History,
 				"draft_id":     draftID,
 			}
+			if uiRes := buildWorkflowUIResource(pending.state, draftID); uiRes != nil {
+				payload["ui_resource"] = uiRes
+			}
 			logging.L().Debug("ai workflow stream result",
 				zap.String("mode", mode),
 				zap.Int("yaml_len", len(pending.state.YAML)),
@@ -718,6 +735,107 @@ func countStepsInYAML(yamlText string) int {
 		}
 	}
 	return count
+}
+
+func buildWorkflowUIResource(state *aiworkflow.State, draftID string) *uiResource {
+	if state == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(state.YAML)
+	if trimmed == "" {
+		return nil
+	}
+	wf, err := workflow.Load([]byte(trimmed))
+	if err != nil {
+		return nil
+	}
+	var builder strings.Builder
+	builder.WriteString("<!doctype html><html><head><meta charset=\"utf-8\"/>")
+	builder.WriteString("<style>")
+	builder.WriteString("body{margin:0;padding:12px;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f8f6f2;color:#2b2b2b}")
+	builder.WriteString(".card{background:#fff;border:1px solid #e5e1db;border-radius:14px;padding:12px;box-shadow:0 8px 20px rgba(0,0,0,0.06)}")
+	builder.WriteString(".title{font-size:14px;font-weight:600;margin-bottom:4px}")
+	builder.WriteString(".meta{font-size:12px;color:#6b6b6b;margin-bottom:10px}")
+	builder.WriteString(".summary{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}")
+	builder.WriteString(".pill{font-size:11px;padding:4px 8px;border-radius:999px;border:1px solid #e5e1db;background:#f3f0ea;color:#4a4a4a}")
+	builder.WriteString(".pill.ok{background:rgba(42,157,75,0.12);border-color:rgba(42,157,75,0.3);color:#2a9d4b}")
+	builder.WriteString(".pill.warn{background:rgba(230,167,0,0.12);border-color:rgba(230,167,0,0.3);color:#b27600}")
+	builder.WriteString(".pill.risk-low{background:rgba(42,157,75,0.12);border-color:rgba(42,157,75,0.3);color:#2a9d4b}")
+	builder.WriteString(".pill.risk-medium{background:rgba(230,167,0,0.12);border-color:rgba(230,167,0,0.3);color:#b27600}")
+	builder.WriteString(".pill.risk-high{background:rgba(208,52,44,0.12);border-color:rgba(208,52,44,0.3);color:#d0342c}")
+	builder.WriteString(".section{margin-top:12px}")
+	builder.WriteString(".section-title{font-size:12px;color:#6b6b6b;margin-bottom:6px}")
+	builder.WriteString(".chips{display:flex;flex-wrap:wrap;gap:6px}")
+	builder.WriteString(".chip{border:1px solid #e5e1db;background:#fff;border-radius:999px;padding:4px 8px;font-size:11px;cursor:pointer}")
+	builder.WriteString("ol{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px}")
+	builder.WriteString("li{font-size:12px;cursor:pointer}")
+	builder.WriteString(".action{color:#6b6b6b;margin-left:6px}")
+	builder.WriteString("</style></head><body>")
+	builder.WriteString("<div class=\"card\">")
+	builder.WriteString("<div class=\"title\">工作流概览</div>")
+	issueCount := len(state.Issues)
+	questionCount := len(state.Questions)
+	validationText := "校验通过"
+	validationClass := "ok"
+	if issueCount > 0 {
+		validationText = "待修复"
+		validationClass = "warn"
+	}
+	riskLevel := strings.ToLower(strings.TrimSpace(string(state.RiskLevel)))
+	if riskLevel == "" {
+		riskLevel = "unknown"
+	}
+	riskLabel := html.EscapeString(riskLevel)
+	riskClass := "risk-" + riskLevel
+	if riskLevel == "unknown" {
+		riskLabel = "unknown"
+		riskClass = ""
+	}
+	builder.WriteString("<div class=\"summary\">")
+	if riskClass != "" {
+		builder.WriteString("<span class=\"pill " + riskClass + "\">风险 " + riskLabel + "</span>")
+	} else {
+		builder.WriteString("<span class=\"pill\">风险 " + riskLabel + "</span>")
+	}
+	builder.WriteString("<span class=\"pill " + validationClass + "\">" + validationText + "</span>")
+	builder.WriteString("<span class=\"pill\">问题 " + strconv.Itoa(issueCount) + "</span>")
+	builder.WriteString("<span class=\"pill\">追问 " + strconv.Itoa(questionCount) + "</span>")
+	builder.WriteString("</div>")
+	builder.WriteString("<div class=\"meta\">步骤数: " + strconv.Itoa(len(wf.Steps)) + "</div>")
+	builder.WriteString("<ol>")
+	for index, step := range wf.Steps {
+		name := html.EscapeString(step.Name)
+		action := html.EscapeString(step.Action)
+		if name == "" {
+			name = "(unnamed step)"
+		}
+		stepIndex := strconv.Itoa(index)
+		if action != "" {
+			builder.WriteString("<li data-step-index=\"" + stepIndex + "\">" + name + "<span class=\"action\">" + action + "</span></li>")
+		} else {
+			builder.WriteString("<li data-step-index=\"" + stepIndex + "\">" + name + "</li>")
+		}
+	}
+	builder.WriteString("</ol>")
+	builder.WriteString("</div>")
+	builder.WriteString("<script>(function(){function send(type,payload){window.parent.postMessage({type:type,payload:payload},\"*\");}")
+	builder.WriteString("function sendSize(){var doc=document.documentElement,body=document.body;var height=Math.max(doc?doc.scrollHeight:0,doc?doc.offsetHeight:0,doc?doc.clientHeight:0,body?body.scrollHeight:0,body?body.offsetHeight:0,body?body.clientHeight:0);var width=Math.max(doc?doc.scrollWidth:0,doc?doc.offsetWidth:0,doc?doc.clientWidth:0,body?body.scrollWidth:0,body?body.offsetWidth:0,body?body.clientWidth:0);if(height||width){send('ui-size-change',{width:width,height:height});}}")
+	builder.WriteString("var target=document.body||document.documentElement;if(typeof ResizeObserver!=='undefined'&&target){var ro=new ResizeObserver(function(){sendSize();});ro.observe(target);}window.addEventListener('load',function(){setTimeout(sendSize,0);});setTimeout(sendSize,120);")
+	builder.WriteString("document.querySelectorAll('[data-step-index]').forEach(function(item){item.addEventListener('click',function(){var idx=parseInt(item.getAttribute('data-step-index')||'-1',10);if(idx>=0){send('focus_step',{index:idx});}});});")
+	builder.WriteString("})();</script>")
+	builder.WriteString("</body></html>")
+	uri := strings.TrimSpace(draftID)
+	if uri == "" {
+		uri = strconv.FormatInt(time.Now().UnixNano(), 10)
+	}
+	return &uiResource{
+		Type: "resource",
+		Resource: uiResourceBody{
+			URI:      "ui://bops/workflow/" + uri,
+			MimeType: "text/html",
+			Text:     builder.String(),
+		},
+	}
 }
 
 func writeSSE(w http.ResponseWriter, event string, payload any) {

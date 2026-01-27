@@ -15,7 +15,7 @@
         <div class="chat-body" ref="chatBodyRef" @scroll="handleChatScroll">
           <ul class="timeline">
             <li v-for="entry in timelineEntries" :key="entry.id" :class="['timeline-item', entry.type]">
-              <div class="timeline-header">
+              <div v-if="entry.type !== 'ui'" class="timeline-header">
                 <span class="timeline-badge" :class="entry.type">{{ entry.label }}</span>
                 <small v-if="entry.extra">{{ entry.extra }}</small>
               </div>
@@ -23,6 +23,35 @@
                 <details class="thinking-toggle">
                   <summary>思考过程</summary>
                   <p v-if="entry.body">{{ entry.body }}</p>
+                </details>
+              </div>
+              <div v-else-if="entry.type === 'ui'" class="ui-resource-card">
+                <details class="ui-resource-details" open>
+                  <summary class="ui-resource-summary">工作流卡片</summary>
+                  <div class="ui-resource-content">
+                    <ui-resource-renderer
+                      v-if="mcpUiReady"
+                      :resource.prop="entry.resource"
+                      :htmlProps.prop="{ autoResizeIframe: { height: true } }"
+                      class="ui-resource-host"
+                    ></ui-resource-renderer>
+                    <iframe
+                      v-else-if="isHtmlResource(entry.resource)"
+                      class="ui-resource-frame"
+                      :srcdoc="entry.resource?.text || ''"
+                      sandbox="allow-scripts allow-same-origin"
+                    ></iframe>
+                    <a
+                      v-else-if="isUriResource(entry.resource)"
+                      class="ui-resource-link"
+                      :href="entry.resource?.text"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      Open UI Resource
+                    </a>
+                    <div v-else class="ui-resource-fallback">UI resource unavailable.</div>
+                  </div>
                 </details>
               </div>
               <p v-else-if="entry.body">{{ entry.body }}</p>
@@ -44,16 +73,9 @@
 
         <div v-if="pendingQuestions.length" class="pending-questions">
           <div class="pending-title">还需要确认</div>
-          <div class="pending-chips">
-            <button
-              v-for="question in pendingQuestions"
-              :key="question"
-              class="chip"
-              type="button"
-              @click="applySuggestion(question)"
-            >
-              {{ question }}
-            </button>
+          <div class="pending-actions">
+            <span class="pending-count">共 {{ pendingQuestions.length }} 项</span>
+            <button class="btn btn-sm" type="button" @click="openQuestionModal()">填写确认</button>
           </div>
         </div>
 
@@ -205,11 +227,12 @@
                   </select>
                 </div>
               </div>
-              <div v-if="steps.length" class="steps-list">
+              <div v-if="steps.length" class="steps-list" ref="stepsListRef">
                 <div
                   class="step-card"
                   v-for="(step, index) in steps"
                   :key="step.name || `step-${index}`"
+                  :data-step-index="index"
                   :class="{
                     active: selectedStepIndex === index,
                     error: canShowIssues && stepIssueIndexes.includes(index)
@@ -507,6 +530,32 @@
         <div v-else class="empty">暂无聊天会话</div>
       </div>
     </div>
+    <div v-if="showQuestionModal" class="modal-backdrop" @click.self="closeQuestionModal">
+      <form class="config-modal question-modal" @submit.prevent="submitQuestionAnswers">
+        <div class="modal-head">
+          <h3>补全确认信息</h3>
+          <button class="modal-close" type="button" @click="closeQuestionModal">&#10005;</button>
+        </div>
+        <p class="modal-summary">请手动补全下列确认项，提交后会更新工作流。</p>
+        <div v-if="pendingQuestions.length" class="question-list">
+          <div class="question-item" v-for="(question, index) in pendingQuestions" :key="question">
+            <label :for="`question-input-${index}`">{{ question }}</label>
+            <textarea
+              :id="`question-input-${index}`"
+              v-model="questionInputs[question]"
+              rows="2"
+              placeholder="请输入确认信息"
+            ></textarea>
+          </div>
+        </div>
+        <div v-else class="empty">暂无需要补充的内容</div>
+        <div v-if="questionInputError" class="alert warn">{{ questionInputError }}</div>
+        <div class="modal-actions">
+          <button class="btn ghost btn-sm" type="button" @click="closeQuestionModal">取消</button>
+          <button class="btn primary btn-sm" type="submit" :disabled="busy">提交确认</button>
+        </div>
+      </form>
+    </div>
     <div v-if="showStepDetailModal" class="modal-backdrop" @click.self="closeStepDetailModal">
       <div class="detail-modal">
         <div class="modal-head">
@@ -580,7 +629,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { useRouter } from "vue-router";
 import { ApiError, apiBase, request } from "../lib/api";
 import StepDetailForm from "../components/StepDetailForm.vue";
@@ -624,6 +673,14 @@ type ChatEntry = {
   extra?: string;
   action?: "fix";
   actionLabel?: string;
+  resource?: UIResourceBody | null;
+};
+
+type UIResourceBody = {
+  uri?: string;
+  mimeType?: string;
+  text?: string;
+  blob?: string;
 };
 
 type StreamReply = {
@@ -708,7 +765,9 @@ const chatEntries = ref<ChatEntry[]>([
 ]);
 const chatPending = ref(false);
 const chatBodyRef = ref<HTMLElement | null>(null);
+const stepsListRef = ref<HTMLElement | null>(null);
 const chatAutoScroll = ref(true);
+const mcpUiReady = ref(false);
 const liveThoughtEntryId = ref<string | null>(null);
 const liveThoughtText = ref("");
 const liveAnswerEntryId = ref<string | null>(null);
@@ -773,6 +832,9 @@ const showExamples = ref(false);
 const showConfigModal = ref(false);
 const showHistoryModal = ref(false);
 const showSessionModal = ref(false);
+const showQuestionModal = ref(false);
+const questionInputs = ref<Record<string, string>>({});
+const questionInputError = ref("");
 const showStepDetailModal = ref(false);
 const detailStepIndex = ref<number | null>(null);
 const showStepYamlModal = ref(false);
@@ -821,6 +883,7 @@ const canShowIssues = computed(() => !syncBlocked.value);
 
 let chatIndex = 0;
 let summaryTimer: number | null = null;
+let uiActionListener: ((event: Event) => void) | null = null;
 let chatScrollScheduled = false;
 watch(
   yaml,
@@ -860,6 +923,22 @@ watch(saveName, () => {
   }
 });
 
+watch(
+  pendingQuestions,
+  (next) => {
+    const nextMap: Record<string, string> = {};
+    next.forEach((question) => {
+      nextMap[question] = questionInputs.value[question] || "";
+    });
+    questionInputs.value = nextMap;
+    if (!next.length) {
+      showQuestionModal.value = false;
+      questionInputError.value = "";
+    }
+  },
+  { immediate: true }
+);
+
 watch(chatEntries, () => {
   scheduleChatScroll();
 });
@@ -875,6 +954,25 @@ onMounted(() => {
   loadEnvPackages();
   loadAIConfig();
   void initChatSession();
+  if (typeof window !== "undefined" && "customElements" in window) {
+    mcpUiReady.value = Boolean(window.customElements.get("ui-resource-renderer"));
+    if (!mcpUiReady.value) {
+      void window.customElements.whenDefined("ui-resource-renderer").then(() => {
+        mcpUiReady.value = true;
+      });
+    }
+  }
+  if (chatBodyRef.value) {
+    uiActionListener = (event: Event) => handleUiAction(event as CustomEvent);
+    chatBodyRef.value.addEventListener("onUIAction", uiActionListener);
+  }
+});
+
+onBeforeUnmount(() => {
+  if (chatBodyRef.value && uiActionListener) {
+    chatBodyRef.value.removeEventListener("onUIAction", uiActionListener);
+  }
+  uiActionListener = null;
 });
 
 async function loadValidationEnvs() {
@@ -1166,11 +1264,55 @@ function applyExample(text: string) {
   showExamples.value = false;
 }
 
-async function applySuggestion(text: string) {
-  const trimmed = prompt.value.trim();
-  prompt.value = trimmed ? `${trimmed}\n${text}` : text;
-  if (busy.value) return;
-  await startStream();
+function openQuestionModal(question?: string) {
+  if (!pendingQuestions.value.length) return;
+  questionInputError.value = "";
+  showQuestionModal.value = true;
+  let focusIndex = 0;
+  if (typeof question === "string" && question.trim()) {
+    const index = pendingQuestions.value.indexOf(question.trim());
+    if (index >= 0) {
+      focusIndex = index;
+    }
+  }
+  void nextTick(() => {
+    const input = document.getElementById(`question-input-${focusIndex}`) as HTMLTextAreaElement | null;
+    if (input) {
+      input.focus();
+    }
+  });
+}
+
+function closeQuestionModal() {
+  showQuestionModal.value = false;
+  questionInputError.value = "";
+}
+
+function buildQuestionAnswerMessage() {
+  const lines = pendingQuestions.value
+    .map((question) => {
+      const answer = (questionInputs.value[question] || "").trim();
+      if (!answer) return "";
+      return `- ${question}: ${answer}`;
+    })
+    .filter(Boolean);
+  if (!lines.length) return "";
+  return ["补充信息：", ...lines].join("\n");
+}
+
+async function submitQuestionAnswers() {
+  if (busy.value) {
+    questionInputError.value = "AI 正在生成，请稍后提交。";
+    return;
+  }
+  const message = buildQuestionAnswerMessage();
+  if (!message) {
+    questionInputError.value = "请至少填写一项确认信息。";
+    return;
+  }
+  questionInputError.value = "";
+  showQuestionModal.value = false;
+  await startStreamWithMessage(message);
 }
 
 function toggleExamples() {
@@ -1192,6 +1334,41 @@ function formatStreamNode(node: string) {
   if (node === "question_gate") return "问题确认";
   if (node === "generator") return "生成";
   return formatNode(node || "AI");
+}
+
+function focusStepFromUI(index: number) {
+  if (!Number.isFinite(index)) return;
+  const safeIndex = Math.floor(index);
+  if (safeIndex < 0 || safeIndex >= steps.value.length) return;
+  workspaceTab.value = "visual";
+  selectStep(safeIndex);
+  void nextTick(() => {
+    const list = stepsListRef.value;
+    if (!list) return;
+    const card = list.querySelector(`[data-step-index="${safeIndex}"]`) as HTMLElement | null;
+    if (card) {
+      card.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  });
+}
+
+function handleUiAction(event: CustomEvent) {
+  const detail = event?.detail as { type?: string; payload?: any } | undefined;
+  if (!detail || typeof detail !== "object") return;
+  const type = detail.type;
+  if (type === "prompt") {
+    const promptText = typeof detail.payload?.prompt === "string" ? detail.payload.prompt : "";
+    if (promptText.trim()) {
+      openQuestionModal(promptText);
+    }
+    return;
+  }
+  if (type === "focus_step") {
+    const index = Number(detail.payload?.index);
+    if (Number.isFinite(index)) {
+      focusStepFromUI(index);
+    }
+  }
 }
 
 function refreshActiveStatus() {
@@ -1237,6 +1414,35 @@ function translateErrorMessage(message: string) {
     return "网络超时";
   }
   return message;
+}
+
+function normalizeUIResource(raw: unknown): UIResourceBody | null {
+  if (!raw || typeof raw !== "object") return null;
+  const maybeResource = raw as { resource?: UIResourceBody } & UIResourceBody;
+  const resource = typeof maybeResource.resource === "object" ? maybeResource.resource : maybeResource;
+  if (!resource || typeof resource !== "object") return null;
+  const mimeType = typeof resource.mimeType === "string" ? resource.mimeType : "";
+  if (!mimeType) return null;
+  let normalizedMimeType = mimeType;
+  if (mimeType.startsWith("text/html")) {
+    normalizedMimeType = "text/html";
+  } else if (mimeType.startsWith("text/uri-list")) {
+    normalizedMimeType = "text/uri-list";
+  }
+  return {
+    uri: typeof resource.uri === "string" ? resource.uri : "",
+    mimeType: normalizedMimeType,
+    text: typeof resource.text === "string" ? resource.text : undefined,
+    blob: typeof resource.blob === "string" ? resource.blob : undefined
+  };
+}
+
+function isHtmlResource(resource?: UIResourceBody | null) {
+  return Boolean(resource?.mimeType?.startsWith("text/html"));
+}
+
+function isUriResource(resource?: UIResourceBody | null) {
+  return resource?.mimeType === "text/uri-list";
 }
 
 function getIndent(line: string) {
@@ -2331,27 +2537,29 @@ function buildContext() {
   return payload;
 }
 
-async function startStream() {
-  const message = prompt.value.trim();
-  if (!message) return;
+async function startStreamWithMessage(message: string, options: { clearPrompt?: boolean } = {}) {
+  const trimmed = message.trim();
+  if (!trimmed) return;
   if (!aiConfigured.value) {
     streamError.value = "未配置AI,无法使用,请设置";
     streamStatus.value = "";
     streamStatusType.value = "";
     return;
   }
+  if (options.clearPrompt) {
+    prompt.value = "";
+  }
   streamStatus.value = "AI 正在准备...";
   streamStatusType.value = "busy";
   lastStatusError.value = "";
   lastStreamError.value = "";
   await ensureChatSession();
-  pushChatEntry({ label: "用户", body: message, type: "user" });
-  prompt.value = "";
+  pushChatEntry({ label: "用户", body: trimmed, type: "user" });
   resetStreamState();
   showExamples.value = false;
   questionOverrides.value = [];
   chatPending.value = true;
-  void appendChatSessionMessage("user", message);
+  void appendChatSessionMessage("user", trimmed);
   busy.value = true;
   streamError.value = "";
   progressEvents.value = [];
@@ -2360,7 +2568,7 @@ async function startStream() {
   const baseYaml = steps.value.length ? currentYaml : "";
   const payload = {
     mode: "generate",
-    prompt: message,
+    prompt: trimmed,
     context: buildContext(),
     env: selectedValidationEnv.value || undefined,
     execute: executeEnabled.value,
@@ -2374,6 +2582,10 @@ async function startStream() {
     busy.value = false;
     chatPending.value = false;
   }
+}
+
+async function startStream() {
+  await startStreamWithMessage(prompt.value, { clearPrompt: true });
 }
 
 async function streamWorkflow(payload: Record<string, unknown>) {
@@ -2454,6 +2666,16 @@ function handleSSEChunk(chunk: string) {
       }
     } else if (eventName === "result") {
       const reply = applyResult(payload);
+      const uiResource = normalizeUIResource(payload.ui_resource);
+      if (uiResource) {
+        pushChatEntry({
+          label: "UI",
+          body: "",
+          type: "ui",
+          resource: uiResource,
+          extra: "UI"
+        });
+      }
       finalizeThoughtStream();
       if (reply) {
         if (hasStreamDelta.value) {
@@ -2518,7 +2740,7 @@ function applyResult(payload: Record<string, unknown>): StreamReply | null {
   if (questions.length) {
     const focus = questions.slice(0, 2).join("、");
     replyLines.push(focus ? `还需要确认：${focus}。` : "还需要确认一些信息。");
-    replyLines.push("点击下方问题继续补充。");
+    replyLines.push("点击下方“填写确认”继续补充。");
     replyType = "warn";
   } else if (issueCount) {
     replyLines.push(`校验发现 ${issueCount} 项问题，可点击“修复”或在右侧调整。`);
@@ -3018,6 +3240,11 @@ function diffSummary(prev: string, next: string) {
   border-color: rgba(208, 52, 44, 0.2);
 }
 
+.timeline-item.ui {
+  align-self: stretch;
+  max-width: 100%;
+}
+
 .thinking-toggle {
   border-radius: 10px;
   padding: 6px 8px;
@@ -3039,6 +3266,62 @@ function diffSummary(prev: string, next: string) {
 .timeline-item.typing {
   opacity: 0.7;
   font-style: italic;
+}
+
+.ui-resource-card {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ui-resource-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ui-resource-summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.ui-resource-details[open] .ui-resource-summary {
+  color: #3c6fd6;
+}
+
+.ui-resource-content {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.ui-resource-host {
+  width: 100%;
+  display: block;
+  border: none;
+  border-radius: 12px;
+  min-height: 0;
+}
+
+.ui-resource-frame {
+  width: 100%;
+  display: block;
+  border: 1px solid rgba(27, 27, 27, 0.08);
+  border-radius: 12px;
+  min-height: 220px;
+  background: #fff;
+}
+
+.ui-resource-link {
+  color: var(--info);
+  font-size: 12px;
+}
+
+.ui-resource-fallback {
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .timeline-actions {
@@ -3195,10 +3478,16 @@ function diffSummary(prev: string, next: string) {
   color: var(--muted);
 }
 
-.pending-chips {
+.pending-actions {
   display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pending-count {
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .chat-toolbar {
@@ -3465,6 +3754,7 @@ textarea {
   min-height: 0;
   flex: 1;
   padding-right: 2px;
+  align-content: start;
 }
 
 .step-card {
@@ -3844,6 +4134,37 @@ textarea {
   font-size: 13px;
   color: var(--muted);
   line-height: 1.6;
+}
+
+.question-modal {
+  max-height: 80vh;
+  overflow: hidden;
+}
+
+.question-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: 46vh;
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.question-item {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.question-item label {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.question-item textarea {
+  min-height: 70px;
 }
 
 .sync-note {
