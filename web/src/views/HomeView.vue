@@ -821,6 +821,7 @@ const planMode = ref("manual-approve");
 const environmentNote = ref("");
 const router = useRouter();
 const SESSION_STORAGE_KEY = "bops_chat_session_id";
+const DRAFT_STORAGE_KEY = "bops_workflow_draft";
 
 const examples = [
   "在 web1/web2 上安装 nginx，渲染配置并启动服务",
@@ -885,6 +886,68 @@ let chatIndex = 0;
 let summaryTimer: number | null = null;
 let uiActionListener: ((event: Event) => void) | null = null;
 let chatScrollScheduled = false;
+let draftSaveTimer: number | null = null;
+
+type DraftSnapshot = {
+  yaml?: string;
+  visual_yaml?: string;
+  auto_sync?: boolean;
+  draft_id?: string;
+};
+
+function loadDraftFromStorage() {
+  if (typeof window === "undefined") return;
+  const raw = window.localStorage.getItem(DRAFT_STORAGE_KEY);
+  if (!raw) return;
+  try {
+    const parsed = JSON.parse(raw) as DraftSnapshot;
+    const savedAutoSync = typeof parsed.auto_sync === "boolean" ? parsed.auto_sync : autoSync.value;
+    autoSync.value = savedAutoSync;
+    const savedYaml = typeof parsed.yaml === "string" ? parsed.yaml : "";
+    const savedVisual = typeof parsed.visual_yaml === "string" ? parsed.visual_yaml : "";
+    if (!savedAutoSync) {
+      if (savedVisual) {
+        visualYaml.value = savedVisual;
+      } else if (savedYaml) {
+        visualYaml.value = savedYaml;
+      }
+      if (savedYaml) {
+        yaml.value = savedYaml;
+      }
+    } else if (savedYaml) {
+      yaml.value = savedYaml;
+    } else if (savedVisual) {
+      yaml.value = savedVisual;
+    }
+    if (typeof parsed.draft_id === "string") {
+      draftId.value = parsed.draft_id;
+    }
+  } catch {
+    window.localStorage.removeItem(DRAFT_STORAGE_KEY);
+  }
+}
+
+function persistDraftToStorage() {
+  if (typeof window === "undefined") return;
+  if (draftSaveTimer) {
+    window.clearTimeout(draftSaveTimer);
+  }
+  draftSaveTimer = window.setTimeout(() => {
+    const payload: DraftSnapshot = {
+      yaml: yaml.value,
+      visual_yaml: visualYaml.value,
+      auto_sync: autoSync.value,
+      draft_id: draftId.value
+    };
+    try {
+      window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(payload));
+    } catch {
+      // ignore storage errors
+    }
+  }, 200);
+}
+
+loadDraftFromStorage();
 watch(
   yaml,
   (next, prev) => {
@@ -909,6 +972,10 @@ watch(
   },
   { immediate: true }
 );
+
+watch([yaml, visualYaml, autoSync, draftId], () => {
+  persistDraftToStorage();
+});
 
 watch(aiDisplayName, (next) => {
   chatEntries.value = chatEntries.value.map((entry) => {
