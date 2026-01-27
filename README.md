@@ -18,6 +18,11 @@
 - AI 协作: 生成/修复/总结，支持高风险人工确认
 - 审计记录: 验证执行日志可追溯
 
+## Claude Skills / Agent 扩展 (规划)
+
+- 通过 Skill 包装配 Agent, 新增 Agent 只需导入 Skill 包
+- 设计文档: `design.md`
+
 ## 未来思考
 - 自主学习: 了解用户更多使用什么功能,使用在哪些场景,将其内置到数据库中,优先给用户去使用.
 -- 参考的三个证据：
@@ -154,6 +159,7 @@ bops status
 ## 文档
 
 - 设计说明: `docs/ai-features-design.md`
+- Claude Skills 设计: `design.md`
 - 使用说明: `docs/usage.md`
 - 验收清单: `docs/acceptance-checklist.md`
 
