@@ -1,25 +1,49 @@
-# 对话生成步骤任务清单 (基于 design.md)
+# 任务清单 (基于 design.md)
 
-## M11 对话生成工作流步骤 (Eino)
-- [x] 后端: State 增加 `Questions []string`，stream 结果输出 `questions`。
-- [x] 后端: 新增 `intent_extract` 节点，输出结构化意图与 `missing[]`。
-- [x] 后端: 新增 `question_gate` 节点，缺失信息时返回问题并短路生成。
-- [x] 后端: 更新 Eino 图顺序为 `normalize -> intent_extract -> question_gate -> generate -> validate -> fix -> safety -> execute -> summarize -> human_gate`。
-- [x] 后端: 更新生成/修复 prompt，强制 JSON wrapper（`workflow` + `questions`）与动作白名单。
-- [x] 后端: 更新 `extractWorkflowYAML()`，优先解析 `workflow`，保留 `questions`。
-- [x] 后端: 生成 YAML 默认补全 `version/name/description/inventory/plan`。
-- [x] 后端: Guardrails（高风险强制 manual-approve、步骤数上限、禁用破坏性动作）。
+## Phase 0: 规范与基础准备
+- [ ] 定义 `skill.yaml` 的 JSON Schema (字段: name/version/description/profile/memory/executables; 校验规则: 必填/类型/路径相对/文件存在; 版本兼容策略与错误提示模板)
+- [ ] 确定技能包目录约定与路径解析规则 (默认 `./skills`; 支持配置路径; 允许相对/绝对路径; 冲突处理策略)
+- [ ] 设计 Skill 加载错误的返回结构 (包含 skill 名称、文件路径、出错字段、修复建议)
 
-- [x] 前端: `applyResult()` 支持 `questions` 写入 `pendingQuestions`。
-- [x] 前端: 问题 chips 点击追加到输入并重新触发生成。
-- [x] 前端: 缺失信息优先显示 `questions`，issues 作为 fallback。
+## Phase 1: Skill Loader (基础框架)
+- [ ] 实现 `EinoSkillLoader` 读取 `skill.yaml` 并做结构校验 (使用 JSON Schema; 返回结构化错误)
+- [ ] 实现 `LoadedSkill` 数据结构 (SystemMessage + Tools; 记录来源 skill 信息与版本)
+- [ ] 实现 `memory.strategy=context` 的加载 (读取 `memory.files`; 支持多文件拼接; 支持字符集与空文件处理)
+- [ ] 实现 `executables.type=script` 的适配 (命令构造: runner + path + args; 参数校验与注入; stdout/stderr 捕获)
+- [ ] 实现 `executables.type=binary` 的适配 (支持固定 args; 提供环境变量与工作目录配置)
+- [ ] 提供示例 Skill `skills/demo-ping` (包含 profile、memory、script; 用于端到端验证)
 
-- [x] 文档: 更新 API/stream payload 说明与示例请求响应。
-- [x] 测试: Pipeline 单测（intent/question gate、JSON wrapper 抽取）。
-- [ ] 验收: 手工回归对话 -> 生成 -> 校验 -> 修复 -> 保存流程。
+## Phase 2: 运行时装配 (Agent 动态化)
+- [ ] 实现 `SkillRegistry` (按 name/version 去重; 支持缓存与刷新; 记录加载来源)
+- [ ] 实现 `AgentFactory` (按配置组装: profile + memory + tools; 支持多 skill 组合与排序)
+- [ ] 增加配置项 `claude_skills` 与 `agents` (读取 `bops.json`; 支持环境变量覆盖; 校验配置合法性)
+- [ ] 支持 Agent 热重载 (文件监听 skills 目录与配置变更; reload 时保证不中断现有请求)
+- [ ] 支持 Profile 模板渲染 (注入运行时变量: env 列表/脚本库/验证环境/用户上下文)
 
-## 新增模块/文件建议
-- [x] `internal/aiworkflow/intent.go`: 意图结构与缺失字段提取。
-- [x] `internal/aiworkflow/questions.go`: question gate 节点逻辑。
-- [x] `internal/aiworkflow/contract.go`: JSON wrapper 解析与 schema 校验。
-- [x] `web/src/lib/ai-questions.ts`（可选）: questions 处理与展示辅助。
+## Phase 3: MCP 执行体与工具扩展
+- [ ] 实现 `executables.type=mcp` (启动 MCP Client; 握手获取工具列表; 映射为 Eino Tool)
+- [ ] 设计工具冲突策略 (同名工具覆盖/拒绝/前缀化; 配置化策略开关)
+- [ ] 增加权限模型 (skill permissions -> API 白名单; 拒绝未授权调用并记录审计)
+
+## Phase 4: 验证与终端回显 (Serverless 容器)
+- [ ] 设计 serverless 容器执行流程 (创建容器->注入工作流与脚本->执行->回收; 失败重试与超时策略)
+- [ ] 实现验证执行器与适配层 (将 workflow step 调度到容器; 捕获 stdout/stderr)
+- [ ] 增加终端日志流式通道 (SSE 或 WebSocket; 消息格式包含时间/来源/step/level)
+- [ ] 前端新增终端页面 (验证过程中实时展示 AI 与容器交互; 支持过滤/暂停/复制)
+- [ ] 日志回传与审计落盘 (保存原始流; 关联 workflow/run_id; 支持检索)
+
+## Phase 5: MCP-UI 与交互组件
+- [ ] 扩展工具返回协议 (支持 `ui_resource` JSON; 标准字段: component/data)
+- [ ] 前端集成 UI 渲染 (识别 ui_resource; 使用 MCP-UI SDK 渲染组件或降级为文本)
+- [ ] 设计并实现示例 UI 组件 (如部署进度、风险提示、步骤对齐)
+
+## Phase 6: API 与管理界面
+- [ ] 新增技能/Agent 管理 API (`GET /api/skills`, `POST /api/skills/reload`, `GET /api/agents`)
+- [ ] 在设置页增加 Skill/Agent 配置入口 (展示已加载技能、版本、来源与错误提示)
+- [ ] 增加验证终端入口 (从工作流/验证结果页跳转到终端详情)
+
+## Phase 7: 测试与文档
+- [ ] 单元测试: skill.yaml 校验、Memory 加载、Tool 适配器参数注入
+- [ ] 集成测试: demo skill 端到端执行 (profile + memory + script)
+- [ ] 验证流程测试: 容器执行 + 日志流式回显
+- [ ] 文档完善: Skill 包规范、示例、配置说明、终端页面说明

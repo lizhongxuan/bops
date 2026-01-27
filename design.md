@@ -1,130 +1,208 @@
-# Claude Skills 扩展方案设计
+# Agent Skills 扩展架构设计
 
-目标: 让项目支持 Claude Skills, 添加新 Agent 只需导入一个新的 Skill 包, 无需修改核心代码。
+* **版本**: 2.0
+* **核心理念**: Spec-Driven Development (规范驱动开发)
+* **技术栈**: Eino (CloudWeGo), Go, MCP (Model Context Protocol), YAML
 
-## 背景与痛点
-- 目前 Agent 能力主要依赖内置逻辑, 扩展新能力需要改动代码。
-- Claude Skills 已形成可复用的技能包模式, 适合按需装配。
-- 需要一套标准化的 Skill 包规范 + 运行时装配机制。
+## 1. 核心架构理念
 
-## 目标
-- 通过配置导入 Skill 包, 自动生成可用 Agent。
-- 技能包即插件, 支持版本化与可追溯。
-- Skill 与工作流/工具体系可组合, 运行时动态加载。
+在 Eino 框架中，支持 Claude Skills 的本质是将磁盘上的**“静态文件”**（配置、文档、脚本）动态转化为运行时的 **Eino Graph 节点配置**。
 
-## 非目标
-- 不在此阶段提供在线技能市场。
-- 不引入强依赖的外部运行时, 保持本地优先。
+一个完整的 Skill 定义为三个核心要素的集合：
 
-## 核心设计
-### 1) Skill 包规范
-Skill 包采用目录形式, 包含 manifest 与实现文件。
+* **Profile (人设/说明书)**: 定义 Agent 的 System Prompt，告诉 LLM 这个技能的边界和用途。
+* **Memory (第一层记忆)**: 必要的领域知识文件（如错误码表、API文档、操作手册），用于 RAG 检索或直接注入 Context。
+* **Executable (执行体)**: 实际的业务逻辑落地，表现为本地脚本（Python/Shell）、二进制工具或 MCP Server 连接。
 
-推荐结构:
-```
+## 2. Skill 包标准规范 (The Spec)
+
+Skill 包不再仅仅是工具的集合，而是微型 Agent 的完整定义。所有定义收敛于 `skill.yaml`。
+
+### 2.1 目录结构
+
+```text
 skills/
-  ops-deploy/
-    skill.json
-    prompts/
-      system.md
-      tools.md
-    tools/
-      deploy.yaml
-    assets/
-      icon.svg
+  └── ops-deploy/              # Skill ID
+      ├── skill.yaml           # 核心定义文件 (OpenSpec 风格)
+      ├── knowledge/           # [Memory] 静态知识库
+      │   ├── deploy_guide.md
+      │   └── error_codes.txt
+      └── scripts/             # [Executable] 执行脚本
+          ├── deploy.py
+          └── rollback.sh
+
 ```
 
-skill.json 示例:
-```json
-{
-  "name": "ops-deploy",
-  "version": "0.1.0",
-  "description": "部署类运维技能",
-  "provider": "claude",
-  "entry": "prompts/system.md",
-  "tools": ["tools/deploy.yaml"],
-  "permissions": ["workflow.read", "workflow.write", "env.read"]
-}
+### 2.2 skill.yaml 定义示例
+
+此 YAML 充当 Eino Loader 的蓝图。
+
+```yaml
+name: "ops-deploy"
+version: "1.0.0"
+description: "负责应用部署、回滚及状态检查的运维专家"
+
+# --- 要素 1: Profile (人设) ---
+profile:
+  role: "Deployment Specialist"
+  instruction: |
+    你是一个负责 Kubernetes 应用部署的专家。
+    在执行部署前，必须先使用 'check_status' 确认环境状态。
+    遇到错误时，请参考知识库中的错误码进行解释。
+
+# --- 要素 2: Memory (记忆) ---
+memory:
+  # 加载策略: 'context' (直接注入 System Prompt) 或 'rag' (向量检索)
+  strategy: "context" 
+  files:
+    - "knowledge/error_codes.txt"
+    - "knowledge/deploy_guide.md"
+
+# --- 要素 3: Executable (执行体/工具) ---
+executables:
+  # 类型 A: 本地脚本 (通过 Eino Generic Executor 调用)
+  - name: "deploy_service"
+    description: "Execute deployment script for a specific service."
+    type: "script"
+    runner: "python3"
+    path: "scripts/deploy.py"
+    parameters: # OpenSpec/JSON Schema 定义
+      type: object
+      properties:
+        service_name: { type: string }
+        image_tag: { type: string }
+      required: ["service_name"]
+
+  # 类型 B: 现有二进制工具
+  - name: "check_cluster_health"
+    description: "Ping the cluster to check connectivity."
+    type: "binary"
+    path: "/usr/local/bin/kubectl"
+    args: ["cluster-info"]
+
+  # 类型 C: MCP Server (高级扩展)
+  - name: "git_ops"
+    type: "mcp"
+    command: "npx"
+    args: ["-y", "@modelcontextprotocol/server-github"]
+
 ```
 
-### 2) Agent 配置即装配
-Agent 由多个 Skill 包组装而成, 启动时自动生成。
+## 3. 核心组件设计 (Eino Integration)
 
-配置示例 (bops.json):
-```json
-{
-  "claude_skills": [
-    "./skills/ops-deploy",
-    "./skills/monitoring"
-  ],
-  "agents": [
-    {
-      "name": "ops",
-      "model": "claude-3.5-sonnet",
-      "skills": ["ops-deploy", "monitoring"]
-    }
-  ]
-}
-```
+### 3.1 EinoSkillLoader (动态加载器)
 
-新增 Agent 流程:
-1) 导入 Skill 包到 `skills/` 或指定路径
-2) 在配置中声明 skill
-3) 重启服务, 自动生效
+这是系统的核心引擎，负责读取 YAML 并实例化 Eino 组件。
 
-### 3) 运行时组件
-- SkillLoader: 解析配置并加载技能包 (本地/压缩包/git)。
-- SkillRegistry: 去重、版本管理、缓存。
-- AgentFactory: 按配置组装 Agent, 生成工具集合与提示词。
-- ToolAdapter: 将 skill 工具描述映射到 Eino 节点/工具协议。
+**工作流程:**
 
-## Claude Skills 兼容策略
-Skill 包内容映射到 Claude Tools 规范:
-- name/description/input_schema -> 工具声明
-- prompts/system.md -> 系统提示词注入
-- tools/*.yaml -> tool 定义与执行适配
+1. **Parse**: 读取 `skill.yaml`，校验结构合法性。
+2. **Build Memory**:
+* 读取 `memory.files` 中的内容。
+* 如果是 `strategy: context`，将文本拼接准备注入 System Prompt。
+* 如果是 `strategy: rag`，初始化 Eino Retriever 并建立临时索引。
 
-处理规则:
-- 同名工具冲突: 后加载覆盖或拒绝 (通过策略配置)。
-- 权限控制: 每个 skill 声明 permissions, 决定可调用的接口集合。
 
-## API 与管理能力
-建议新增:
-- `GET /api/skills` 列出已加载技能
-- `POST /api/skills/reload` 重新加载技能包
-- `GET /api/agents` 列出可用 Agent
+3. **Build Tools**:
+* 遍历 `executables` 列表。
+* 对于 `script/binary` 类型：封装为 Eino Tool（使用 `os/exec` 的通用桥接器）。
+* 对于 `mcp` 类型：启动 MCP Client，通过握手协议动态获取 Tool 列表并转换。
 
-## 安全与隔离
-- Skill 包只允许访问白名单 API。
-- 可设置 `read_only` 与 `restricted` 两种运行模式。
-- 记录 skill 的调用审计, 便于回溯。
 
-## 数据结构建议
+4. **Construct**: 返回一个 `LoadedSkill` 对象。
+
 ```go
-type SkillManifest struct {
-  Name        string
-  Version     string
-  Description string
-  Provider    string
-  Entry       string
-  Tools       []string
-  Permissions []string
+type LoadedSkill struct {
+    SystemMessage *schema.Message // 包含 Profile + Memory
+    Tools         []tool.Tool     // 包含封装好的 Executable
 }
+
 ```
 
-## 新增需求: 验证与终端回显
-### 1) 验证执行 (Serverless 容器)
-- 验证功能启动短生命周期的 serverless 容器, 用于运行工作流。
-- 容器内执行工作流步骤, 终端输出与状态回传到 bops, 用于展示与审计。
+### 3.2 动态激活 (Runtime Activation)
 
-### 2) 终端页面与实时交互
-- 验证过程中提供终端页面, 实时展示 AI 与容器的交互内容。
-- UI 建议标注来源 (AI/容器/系统) 与步骤, 便于定位问题。
-- 日志以流式方式推送到前端 (SSE/WebSocket 均可), 保证低延迟可视化。
+在 `bops` 主程序中，Agent 不再是硬编码的，而是根据配置动态组装。
 
-## 里程碑任务
-- [ ] 定义 skill.json 与工具描述 schema
-- [ ] 实现 SkillLoader + SkillRegistry
-- [ ] AgentFactory 装配与热加载
-- [ ] Claude Tools 适配层
-- [ ] API 与可视化管理页
+```go
+// 伪代码示例
+func BuildDynamicAgent(skillName string) (*eino.Runnable, error) {
+    // 1. Loader 工作
+    loader := NewSkillLoader("./skills")
+    skillData, _ := loader.Load(skillName)
+
+    // 2. Eino Agent 组装
+    // 将 Skill 的要素注入到 ReAct 或其他 Graph 模式中
+    agent, _ := react.NewAgent(ctx, &react.AgentConfig{
+        Model:        chatModel,
+        SystemPrompt: skillData.SystemMessage.Content, // 注入 Profile & Memory
+        Tools:        skillData.Tools,                 // 注入 Executable
+    })
+    
+    return agent, nil
+}
+
+```
+
+## 4. MCP-UI 与终端交互扩展
+
+为了实现“交互式智能终端”的目标，`Executable` 的返回结果需要被特殊处理。
+
+### 4.1 UI 协议扩展
+
+Skill 中的脚本 (`scripts/*.py`) 执行后，除了返回文本，还可以返回结构化的 **UI Resource**。
+
+* **约定**: 脚本输出标准 JSON。
+* **格式**:
+
+```json
+{
+  "type": "ui_resource",
+  "component": "deployment-progress",
+  "data": { "service": "api-gateway", "progress": 85, "status": "pulling_image" }
+}
+
+```
+
+### 4.2 验证与回显 (Bops Terminal)
+
+* **Serverless 容器运行**: 当 `Executable` 被调用时，若配置了隔离要求，bops 启动临时容器运行脚本。
+* **流式回显**:
+* 容器的 `Stdout/Stderr` -> SSE/WebSocket -> 前端 Terminal 组件。
+* 前端识别到 JSON 中的 `ui_resource` 标记，自动渲染为 React 组件（如进度条、状态卡片），而非纯文本。
+
+
+
+## 5. 里程碑任务分解 (Roadmap)
+
+**Phase 1: 基础框架 (The Skeleton)**
+
+* [ ] 定义 `skill.yaml` 的 JSON Schema 规范。
+* [ ] 实现 `EinoSkillLoader`：
+* [ ] 支持 YAML 解析。
+* [ ] 支持 `context` 模式的 Memory 加载。
+* [ ] 实现基础的 Script -> Eino Tool 通用适配器。
+
+
+* [ ] 编写一个示例 Skill (`skills/demo-ping`) 进行验证。
+
+**Phase 2: 运行时增强 (The Brain)**
+
+* [ ] 支持 `mcp` 类型的 Executable，实现 Eino MCP Client。
+* [ ] 实现 Agent 的热重载机制 (Config Watcher)。
+* [ ] 实现 `Profile` 的模板渲染 (支持动态变量注入)。
+
+**Phase 3: 交互升级 (The Face)**
+
+* [ ] 扩展 Tool 返回协议，支持 `UIResource`。
+* [ ] 前端集成 MCP-UI SDK，实现组件动态渲染。
+* [ ] 实现脚本执行日志到前端 Terminal 的流式传输。
+
+## 6. 总结
+
+此方案将 Agent 的开发模式从 **“写 Go 代码”** 转变为 **“写 Spec 文档 + 脚本”**。
+
+* **Profile** 赋予了 Agent 灵魂。
+* **Memory** 赋予了 Agent 知识。
+* **Executable** 赋予了 Agent 手脚。
+
+Eino Loader 则是将这三者粘合起来的魔法胶水。
