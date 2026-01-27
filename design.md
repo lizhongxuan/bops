@@ -112,10 +112,19 @@ type SkillManifest struct {
 }
 ```
 
+## 新增需求: 验证与终端回显
+### 1) 验证执行 (Serverless 容器)
+- 验证功能启动短生命周期的 serverless 容器, 用于运行工作流。
+- 容器内执行工作流步骤, 终端输出与状态回传到 bops, 用于展示与审计。
+
+### 2) 终端页面与实时交互
+- 验证过程中提供终端页面, 实时展示 AI 与容器的交互内容。
+- UI 建议标注来源 (AI/容器/系统) 与步骤, 便于定位问题。
+- 日志以流式方式推送到前端 (SSE/WebSocket 均可), 保证低延迟可视化。
+
 ## 里程碑任务
 - [ ] 定义 skill.json 与工具描述 schema
 - [ ] 实现 SkillLoader + SkillRegistry
 - [ ] AgentFactory 装配与热加载
 - [ ] Claude Tools 适配层
 - [ ] API 与可视化管理页
-
