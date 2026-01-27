@@ -4,3 +4,6 @@
 /.gocache/
 /bops.json
 /npm-cache/
+/web/node_modules/
+/web/npm-cache/
+/bin/
