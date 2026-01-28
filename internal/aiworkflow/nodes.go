@@ -40,6 +40,9 @@ func (p *Pipeline) inputNormalize(_ context.Context, state *State) (*State, erro
 		emitEvent(state, "normalize", "error", err.Error())
 		return state, err
 	}
+	if state.Mode == ModeGenerate && isGreetingPrompt(state.Prompt) {
+		state.Intent = &Intent{Missing: []string{"goal"}}
+	}
 	emitEvent(state, "normalize", "done", "")
 	logging.L().Debug("aiworkflow normalize done",
 		zap.String("mode", string(state.Mode)),

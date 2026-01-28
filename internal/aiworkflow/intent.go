@@ -6,6 +6,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"bops/internal/ai"
 )
@@ -25,6 +27,10 @@ const intentExtractTimeout = 8 * time.Second
 func (p *Pipeline) intentExtract(ctx context.Context, state *State) (*State, error) {
 	if state.Mode != ModeGenerate {
 		emitEvent(state, "intent_extract", "skipped", "mode is not generate")
+		return state, nil
+	}
+	if state.Intent != nil && len(state.Intent.Missing) > 0 {
+		emitEvent(state, "intent_extract", "skipped", "intent already set")
 		return state, nil
 	}
 	emitEvent(state, "intent_extract", "start", "")
@@ -83,4 +89,53 @@ func parseIntentResponse(reply string) (*Intent, error) {
 		return nil, err
 	}
 	return &intent, nil
+}
+
+func isGreetingPrompt(prompt string) bool {
+	normalized := normalizePromptToken(prompt)
+	if normalized == "" {
+		return false
+	}
+	if _, ok := greetingTokens[normalized]; ok {
+		return true
+	}
+	if strings.HasPrefix(normalized, "你好") && utf8.RuneCountInString(normalized) <= 3 {
+		return true
+	}
+	return false
+}
+
+func normalizePromptToken(prompt string) string {
+	trimmed := strings.TrimSpace(prompt)
+	if trimmed == "" {
+		return ""
+	}
+	lowered := strings.ToLower(trimmed)
+	return strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) || unicode.IsPunct(r) {
+			return -1
+		}
+		return r
+	}, lowered)
+}
+
+var greetingTokens = map[string]struct{}{
+	"hi":         {},
+	"hello":      {},
+	"hey":        {},
+	"hiya":       {},
+	"yo":         {},
+	"sup":        {},
+	"hithere":    {},
+	"hellothere": {},
+	"heythere":   {},
+	"你好":        {},
+	"您好":        {},
+	"嗨":         {},
+	"哈喽":        {},
+	"在吗":        {},
+	"早上好":       {},
+	"中午好":       {},
+	"下午好":       {},
+	"晚上好":       {},
 }
