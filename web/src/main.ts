@@ -11,6 +11,7 @@ import EnvPackagesView from "./views/EnvPackagesView.vue";
 import ValidationEnvsView from "./views/ValidationEnvsView.vue";
 import ScriptsView from "./views/ScriptsView.vue";
 import SettingsView from "./views/SettingsView.vue";
+import ValidationConsoleView from "./views/ValidationConsoleView.vue";
 import "@mcp-ui/client/ui-resource-renderer.wc.js";
 import "./styles/tokens.css";
 import "./styles/global.css";
@@ -67,6 +68,11 @@ const router = createRouter({
       path: "/runs",
       name: "runs",
       component: RunsView
+    },
+    {
+      path: "/validation-console",
+      name: "validation-console",
+      component: ValidationConsoleView
     },
     {
       path: "/settings",

@@ -343,8 +343,13 @@
 
           <div v-if="executeResult" class="execution-result" :class="executeResult.status">
             <div class="result-title">
-              执行结果: {{ executeResult.status }}
-              <span v-if="executeResult.code">(code {{ executeResult.code }})</span>
+              <div>
+                执行结果: {{ executeResult.status }}
+                <span v-if="executeResult.code">(code {{ executeResult.code }})</span>
+              </div>
+              <button class="btn ghost btn-sm" type="button" @click="openValidationConsole">
+                终端详情
+              </button>
             </div>
             <div v-if="executeResult.error" class="result-error">{{ executeResult.error }}</div>
             <div class="result-io">
@@ -659,6 +664,16 @@ type ExecutionResult = {
   error?: string;
 };
 
+type ValidationConsolePayload = {
+  status: string;
+  stdout?: string;
+  stderr?: string;
+  code?: number;
+  error?: string;
+  env?: string;
+  created_at: string;
+};
+
 type ProgressEvent = {
   node: string;
   status: string;
@@ -822,6 +837,7 @@ const environmentNote = ref("");
 const router = useRouter();
 const SESSION_STORAGE_KEY = "bops_chat_session_id";
 const DRAFT_STORAGE_KEY = "bops_workflow_draft";
+const VALIDATION_CONSOLE_KEY = "bops.validation-console";
 
 const examples = [
   "在 web1/web2 上安装 nginx，渲染配置并启动服务",
@@ -2900,6 +2916,25 @@ async function validateDraft() {
   }
 }
 
+function persistValidationConsole(result: ExecutionResult) {
+  const payload: ValidationConsolePayload = {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    code: result.code,
+    error: result.error,
+    env: selectedValidationEnv.value || "",
+    created_at: new Date().toISOString()
+  };
+  sessionStorage.setItem(VALIDATION_CONSOLE_KEY, JSON.stringify(payload));
+}
+
+function openValidationConsole() {
+  if (!executeResult.value) return;
+  persistValidationConsole(executeResult.value);
+  router.push("/validation-console");
+}
+
 async function runExecution() {
   if (!yaml.value.trim()) return;
   if (!ensureYamlSynced()) return;
@@ -2912,6 +2947,7 @@ async function runExecution() {
       body: { yaml: payloadYaml, env: selectedValidationEnv.value || undefined }
     });
     executeResult.value = data;
+    persistValidationConsole(data);
     const codeText = typeof data.code === "number" ? ` (code ${data.code})` : "";
     const isSuccess = data.status === "success";
     pushChatEntry({
@@ -2926,6 +2962,7 @@ async function runExecution() {
       status: "failed",
       error: apiErr.message ? `验证失败: ${apiErr.message}` : "验证失败，请检查服务是否启动"
     };
+    persistValidationConsole(executeResult.value);
     pushChatEntry({
       label: "执行",
       body: executeResult.value.error || "验证失败",
@@ -4119,6 +4156,10 @@ textarea {
 .result-title {
   font-weight: 600;
   margin-bottom: 8px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
 }
 
 .result-io pre {

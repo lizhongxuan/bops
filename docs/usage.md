@@ -27,6 +27,29 @@
 }
 ```
 
+### Skill / Agent 配置
+
+在 `bops.json` 中声明 Skills 与 Agents:
+
+```json
+{
+  "claude_skills": ["demo-ping"],
+  "agents": [
+    {
+      "name": "ops-agent",
+      "model": "gpt-4o-mini",
+      "skills": ["demo-ping"]
+    }
+  ],
+  "tool_conflict_policy": "error"
+}
+```
+
+支持环境变量覆盖:
+- `BOPS_CLAUDE_SKILLS` (逗号分隔)
+- `BOPS_AGENTS` (JSON)
+- `BOPS_TOOL_CONFLICT_POLICY` (`error` / `overwrite` / `keep` / `prefix`)
+
 ## AI 工作流助手 (Web)
 
 入口: `http://localhost:5173/`，首页提供“生成 → 校验 → 修复 → 保存”的完整链路。
@@ -36,6 +59,10 @@
 - 可执行“校验 / 沙箱验证”查看错误与输出日志。
 - 风险等级为 `high` 或校验失败时，需要人工确认并填写原因后才能保存。
 - 保存后自动跳转到工作流编排页。
+
+验证终端:
+- 在首页执行“沙箱验证”后，点击“终端详情”进入 `验证终端` 页面查看 stdout/stderr。
+- 终端入口路径: `/validation-console`。
 
 审计日志:
 - 每次沙箱执行会记录到 `data/validation_audit.log` (JSONL)，便于追踪执行环境与结果。

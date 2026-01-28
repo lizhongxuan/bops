@@ -15,13 +15,16 @@
 - 工作流模型: 线性步骤编排，结构清晰、易扩展
 - 可视化界面: 编排、流程视图与执行控制台
 - 沙箱验证: 容器优先，支持 SSH/Agent
-- 验证执行: 启动 serverless 容器运行工作流，终端输出实时回传
+- 验证执行: 启动 serverless 容器运行工作流，终端输出回传可查看
 - AI 协作: 生成/修复/总结，支持高风险人工确认
 - 审计记录: 验证执行日志可追溯
 
-## Claude Skills / Agent 扩展 (规划)
+## Claude Skills / Agent 扩展
 
 - 通过 Skill 包装配 Agent, 新增 Agent 只需导入 Skill 包
+- 在 `bops.json` 配置 `claude_skills` / `agents`
+- 设置页可查看 Skills/Agents 并触发重新加载
+- 说明文档: `docs/skills.md`
 - 设计文档: `design.md`
 
 ## 未来思考
@@ -137,8 +140,11 @@ bops status
 - agent
 
 补充能力:
-- 验证过程中提供终端页面, 实时查看 AI 与容器的交互内容
-- 终端输出流式回传至 bops, 便于排查问题
+- 验证过程中提供终端页面, 查看 stdout/stderr
+- 终端输出回传至 bops, 便于排查问题
+
+终端入口:
+- `http://localhost:5173/validation-console`
 
 相关接口:
 - `GET /api/validation-envs`
@@ -165,6 +171,7 @@ bops status
 
 - 设计说明: `docs/ai-features-design.md`
 - Claude Skills 设计: `design.md`
+- Skill 包规范: `docs/skills.md`
 - 使用说明: `docs/usage.md`
 - 验收清单: `docs/acceptance-checklist.md`
 

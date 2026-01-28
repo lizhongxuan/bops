@@ -19,6 +19,7 @@ import (
 	"bops/internal/logging"
 	"bops/internal/runmanager"
 	"bops/internal/scriptstore"
+	"bops/internal/skills"
 	"bops/internal/state"
 	"bops/internal/validationenv"
 	"bops/internal/workflowstore"
@@ -46,6 +47,8 @@ type Server struct {
 	runs            *runmanager.Manager
 	bus             *eventbus.Bus
 	auditLogPath    string
+	skillLoader     *skills.Loader
+	skillRegistry   *skills.Registry
 }
 
 func New(cfg config.Config, configPath string) *Server {
@@ -100,6 +103,7 @@ func New(cfg config.Config, configPath string) *Server {
 		bus:             bus,
 		auditLogPath:    filepath.Join(cfg.DataDir, "validation_audit.log"),
 	}
+	srv.initSkills(cfg)
 	srv.routes()
 	return srv
 }

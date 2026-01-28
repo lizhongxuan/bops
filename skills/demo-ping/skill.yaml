@@ -1,0 +1,33 @@
+name: "demo-ping"
+version: "0.1.0"
+description: "Simple ping skill for validating the loader and tool adapter."
+
+profile:
+  role: "Ping Operator"
+  instruction: |
+    You are a lightweight network check assistant.
+    Always ask for the host if it is missing.
+
+memory:
+  strategy: "context"
+  files:
+    - "knowledge/guide.md"
+
+executables:
+  - name: "ping_host"
+    description: "Ping a host using the demo script."
+    type: "script"
+    runner: "python3"
+    path: "scripts/ping.py"
+    parameters:
+      type: object
+      properties:
+        host:
+          type: string
+          description: "Target host or IP."
+        count:
+          type: integer
+          description: "Number of ping attempts."
+          default: 1
+      required:
+        - host

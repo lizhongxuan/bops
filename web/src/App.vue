@@ -12,7 +12,7 @@ const activeWorkflow = computed(() => {
 const hasWorkflow = computed(() => activeWorkflow.value.length > 0);
 
 const isFullHeightPage = computed(() =>
-  ["run-console", "workflow-flow"].includes(routeName.value)
+  ["run-console", "validation-console", "workflow-flow"].includes(routeName.value)
 );
 
 const hideTopbarTitle = computed(() =>
@@ -22,6 +22,7 @@ const hideTopbarTitle = computed(() =>
     "runs",
     "workflow-runs",
     "run-console",
+    "validation-console",
     "envs",
     "validation-envs",
     "scripts",
@@ -37,6 +38,7 @@ const pageTitle = computed(() => {
   if (routeName.value === "workflows") return "选择工作流";
   if (routeName.value === "runs") return "运行记录";
   if (routeName.value === "run-console") return "运行控制台";
+  if (routeName.value === "validation-console") return "验证终端";
   if (routeName.value === "validation-envs") return "验证环境";
   if (routeName.value === "scripts") return "脚本库";
   if (routeName.value === "settings") return "设置";
