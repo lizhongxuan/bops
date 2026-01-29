@@ -17,6 +17,7 @@ const isFullHeightPage = computed(() =>
 
 const hideTopbarTitle = computed(() =>
   [
+    "workbench",
     "home",
     "workflows",
     "runs",
@@ -31,7 +32,8 @@ const hideTopbarTitle = computed(() =>
 );
 
 const showTopbarTitle = computed(() => !hideTopbarTitle.value);
-const showTopbar = computed(() => showTopbarTitle.value || showSwitch.value);
+const isWorkbench = computed(() => routeName.value === "workbench");
+const showTopbar = computed(() => showTopbarTitle.value || showSwitch.value || isWorkbench.value);
 
 const pageTitle = computed(() => {
   if (hasWorkflow.value) return activeWorkflow.value;
@@ -91,18 +93,21 @@ const showSwitch = computed(() => hasWorkflow.value);
     </aside>
 
     <div class="main">
-      <header v-if="showTopbar" class="topbar">
-        <div v-if="showTopbarTitle">
+      <header v-if="showTopbar" class="topbar" :class="{ 'topbar-workbench': isWorkbench }">
+        <div v-if="showTopbarTitle" class="title-block">
           <div class="title">{{ pageTitle }}</div>
           <div v-if="showMeta" class="meta">
             上次保存 2 分钟前
           </div>
         </div>
         <div v-else class="title-spacer"></div>
-        <div class="actions">
-          <RouterLink v-if="showSwitch" class="btn ghost" to="/workflows">
-            切换工作流
-          </RouterLink>
+        <div class="topbar-right">
+          <div id="topbar-extra" class="topbar-extra"></div>
+          <div class="actions">
+            <RouterLink v-if="showSwitch" class="btn ghost" to="/workflows">
+              切换工作流
+            </RouterLink>
+          </div>
         </div>
       </header>
 
@@ -225,12 +230,43 @@ const showSwitch = computed(() => hasWorkflow.value);
   overflow: hidden;
 }
 
-  .topbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 24px 32px 16px;
-  }
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 24px 32px 16px;
+  gap: 16px;
+}
+
+.title-block {
+  display: flex;
+  flex-direction: column;
+}
+
+.title-spacer {
+  flex: 1;
+}
+
+.topbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.topbar-extra {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.topbar-workbench {
+  justify-content: flex-end;
+}
+
+.topbar-workbench .title-spacer {
+  display: none;
+}
 
 .title {
   font-family: "Space Grotesk", sans-serif;

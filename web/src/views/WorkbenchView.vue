@@ -1,22 +1,16 @@
 <template>
   <section class="workbench">
-    <header class="workbench-bar">
-      <div class="bar-left">
-        <h2>工作台</h2>
-        <span class="bar-sub">拖拽模板到画布，生成节点</span>
-      </div>
-      <div class="bar-status">
+    <teleport to="#topbar-extra">
+      <div class="workbench-topbar">
         <span class="status-chip">运行进度 0.00%</span>
-      </div>
-      <div class="bar-actions">
         <button class="btn btn-sm ghost" type="button" @click="autoLayout">自动布局</button>
         <button class="btn btn-sm" type="button" @click="handleAutoFix">校验</button>
         <button class="btn btn-sm" type="button" @click="handleRun">运行</button>
         <button class="btn btn-sm ghost">保存</button>
       </div>
-    </header>
+    </teleport>
 
-    <div class="workbench-body">
+    <div class="workbench-body" :class="{ 'detail-open': !!selectedNode }">
       <aside class="library-pane">
         <NodeLibraryPanel />
       </aside>
@@ -859,35 +853,10 @@ function formatRunEventLine(eventName: string, payload: any, eventData: Record<s
   padding: 18px;
 }
 
-.workbench-bar {
+.workbench-topbar {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  background: var(--panel);
-  border-radius: var(--radius-lg);
-  padding: 14px 18px;
-  box-shadow: var(--shadow);
-  gap: 16px;
-}
-
-.bar-left h2 {
-  margin: 0;
-  font-size: 18px;
-  color: var(--ink);
-}
-
-.bar-sub {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.bar-actions {
-  display: flex;
   gap: 8px;
-}
-
-.bar-status {
-  margin-left: auto;
 }
 
 .status-chip {
@@ -901,9 +870,13 @@ function formatRunEventLine(eventName: string, payload: any, eventData: Record<s
 
 .workbench-body {
   display: grid;
-  grid-template-columns: 320px 1fr 300px 320px;
+  grid-template-columns: 280px minmax(0, 1fr) 320px;
   gap: 16px;
   min-height: 70vh;
+}
+
+.workbench-body.detail-open {
+  grid-template-columns: 280px minmax(0, 1fr) 280px 320px;
 }
 
 .library-pane {
