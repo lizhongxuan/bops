@@ -88,4 +88,20 @@ const router = createRouter({
   ]
 });
 
+router.beforeEach((to) => {
+  if (to.name !== "workbench") return;
+  const workflow =
+    typeof to.query.workflow === "string"
+      ? to.query.workflow
+      : "";
+  const stored = localStorage.getItem("bops-last-workflow") || "";
+  if (!workflow) {
+    if (stored) {
+      return { path: "/", query: { workflow: stored } };
+    }
+    return { path: "/workflows" };
+  }
+  localStorage.setItem("bops-last-workflow", workflow);
+});
+
 createApp(App).use(router).mount("#app");

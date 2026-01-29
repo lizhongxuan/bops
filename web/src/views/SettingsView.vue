@@ -3,7 +3,7 @@
     <div class="settings-header">
       <div>
         <h1>设置</h1>
-        <p>配置 AI Provider 与 API Key，生效后可在首页直接使用对话生成。</p>
+        <p>配置 AI Provider 与 API Key，生效后可在工作区直接使用对话生成。</p>
       </div>
     </div>
 

@@ -813,10 +813,12 @@ function formatRunEventLine(eventName: string, payload: any, eventData: Record<s
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 18px;
+  padding: 16px;
   position: relative;
   flex: 1;
   min-height: 0;
+  height: 100%;
+  width: 100%;
 }
 
 .workbench-topbar {
@@ -872,6 +874,7 @@ function formatRunEventLine(eventName: string, payload: any, eventData: Record<s
   gap: 16px;
   flex: 1;
   min-height: 0;
+  height: 100%;
 }
 
 .workbench-body.detail-open {

@@ -12,7 +12,7 @@
       </div>
       <div class="actions">
         <button class="btn ghost" type="button" @click="goBack">返回</button>
-        <RouterLink class="btn" to="/">回到首页</RouterLink>
+      <RouterLink class="btn" to="/">回到工作区</RouterLink>
       </div>
     </div>
 

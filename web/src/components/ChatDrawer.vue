@@ -2,17 +2,13 @@
   <aside :class="['chat-drawer', collapsed ? 'collapsed' : 'expanded']">
     <div class="drawer-handle" @click="toggle">
       <span class="handle-icon">💬</span>
-      <span v-if="collapsed" class="handle-label">AI 助手</span>
     </div>
     <div v-if="!collapsed" class="drawer-body">
-      <header class="drawer-head">
-        <div>
-          <h3>工作流 AI 助手</h3>
-          <p v-if="selectedNode" class="drawer-sub">当前节点：{{ selectedNode.name }}</p>
-          <p v-else class="drawer-sub">根据需求生成节点与关系，或优化节点。</p>
-        </div>
+      <div class="drawer-status-row">
         <div class="status-tag" :class="statusTag.cls">{{ statusTag.text }}</div>
-      </header>
+        <button class="icon-btn" type="button" @click="toggle" aria-label="折叠">›</button>
+        <button class="icon-btn" type="button" @click="toggleRunModal" aria-label="运行状态">📈</button>
+      </div>
 
       <div class="chat-body">
         <ul class="timeline">
@@ -54,45 +50,55 @@
         </div>
       </div>
 
-      <div class="run-panel">
-        <div class="run-head">
-          <span>运行状态</span>
-          <span class="run-status">{{ runStatus || "idle" }}</span>
-        </div>
-        <div v-if="runSummary" class="run-summary">
-          <div class="summary-row">
-            <span>状态</span>
-            <strong>{{ runSummary.status || "finished" }}</strong>
+    </div>
+    <teleport to="body">
+      <div v-if="runModalOpen" class="run-modal-backdrop" @click="toggleRunModal">
+        <div class="run-modal" @click.stop>
+          <div class="run-modal-head">
+            <span>运行状态与日志</span>
+            <button class="icon-btn" type="button" @click="toggleRunModal" aria-label="关闭">✕</button>
           </div>
-          <div class="summary-row">
-            <span>步骤</span>
-            <span>{{ runSummary.successSteps }}/{{ runSummary.totalSteps }} 成功</span>
+          <div class="run-panel">
+            <div class="run-head">
+              <span>运行状态</span>
+              <span class="run-status">{{ runStatus || "idle" }}</span>
+            </div>
+            <div v-if="runSummary" class="run-summary">
+              <div class="summary-row">
+                <span>状态</span>
+                <strong>{{ runSummary.status || "finished" }}</strong>
+              </div>
+              <div class="summary-row">
+                <span>步骤</span>
+                <span>{{ runSummary.successSteps }}/{{ runSummary.totalSteps }} 成功</span>
+              </div>
+              <div class="summary-row">
+                <span>失败</span>
+                <span>{{ runSummary.failedSteps }}</span>
+              </div>
+              <div class="summary-row">
+                <span>耗时</span>
+                <span>{{ formatDuration(runSummary.durationMs) }}</span>
+              </div>
+              <div v-if="runSummary.issues.length" class="summary-issues">
+                <div class="summary-label">问题列表</div>
+                <ul>
+                  <li v-for="(issue, idx) in runSummary.issues" :key="idx">{{ issue }}</li>
+                </ul>
+              </div>
+              <div v-else-if="runSummary.message" class="summary-issues">
+                <div class="summary-label">信息</div>
+                <div class="summary-message">{{ runSummary.message }}</div>
+              </div>
+            </div>
+            <div class="run-logs">
+              <div v-if="!runLogs.length" class="muted">暂无日志</div>
+              <div v-for="(line, idx) in runLogs" :key="idx" class="log-line">{{ line }}</div>
+            </div>
           </div>
-          <div class="summary-row">
-            <span>失败</span>
-            <span>{{ runSummary.failedSteps }}</span>
-          </div>
-          <div class="summary-row">
-            <span>耗时</span>
-            <span>{{ formatDuration(runSummary.durationMs) }}</span>
-          </div>
-          <div v-if="runSummary.issues.length" class="summary-issues">
-            <div class="summary-label">问题列表</div>
-            <ul>
-              <li v-for="(issue, idx) in runSummary.issues" :key="idx">{{ issue }}</li>
-            </ul>
-          </div>
-          <div v-else-if="runSummary.message" class="summary-issues">
-            <div class="summary-label">信息</div>
-            <div class="summary-message">{{ runSummary.message }}</div>
-          </div>
-        </div>
-        <div class="run-logs">
-          <div v-if="!runLogs.length" class="muted">暂无日志</div>
-          <div v-for="(line, idx) in runLogs" :key="idx" class="log-line">{{ line }}</div>
         </div>
       </div>
-    </div>
+    </teleport>
   </aside>
 </template>
 
@@ -135,6 +141,7 @@ const busy = computed(() => Boolean(props.busy));
 const runStatus = computed(() => props.runStatus || "");
 const runSummary = computed(() => props.runSummary || null);
 const runLogs = computed(() => props.runLogs || []);
+const runModalOpen = ref(false);
 
 type TimelineEntry = {
   id: string;
@@ -191,6 +198,10 @@ function emitRegenerate() {
   emit("regenerate", text);
 }
 
+function toggleRunModal() {
+  runModalOpen.value = !runModalOpen.value;
+}
+
 onMounted(loadState);
 watch(collapsed, persistState);
 watch(status, (value) => {
@@ -239,7 +250,7 @@ function formatDuration(ms: number) {
 
 <style scoped>
 .chat-drawer {
-  position: absolute;
+  position: fixed;
   right: 0;
   top: 0;
   background: var(--panel);
@@ -251,27 +262,31 @@ function formatDuration(ms: number) {
   overflow: hidden;
   height: 100%;
   transition: width 0.2s ease;
-  z-index: 30;
+  z-index: 120;
 }
 
 .chat-drawer.collapsed {
-  width: 56px;
-  align-items: stretch;
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  align-items: center;
+  box-shadow: 0 12px 22px rgba(27, 27, 27, 0.16);
+  top: 72px;
+  right: 20px;
 }
 
 .chat-drawer.collapsed .drawer-handle {
   flex: 1;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.chat-drawer.collapsed .handle-label {
-  writing-mode: vertical-rl;
-  letter-spacing: 0.2em;
+  padding: 0;
+  border-bottom: none;
+  border-radius: 999px;
 }
 
 .chat-drawer.expanded {
-  width: 420px;
+  width: 520px;
+  height: 100%;
+  top: 0;
+  right: 0;
 }
 
 .drawer-handle {
@@ -285,39 +300,27 @@ function formatDuration(ms: number) {
   border-bottom: 1px solid #e3ded7;
 }
 
-.handle-icon {
-  font-size: 16px;
+.chat-drawer.expanded .drawer-handle {
+  display: none;
 }
 
-.handle-label {
-  font-size: 11px;
-  color: var(--muted);
+.handle-icon {
+  font-size: 16px;
 }
 
 .drawer-body {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  padding: 16px;
+  gap: 8px;
+  padding: 14px;
   flex: 1;
 }
 
-.drawer-head {
+.drawer-status-row {
   display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.drawer-head h3 {
-  margin: 0;
-  font-size: 16px;
-}
-
-.drawer-sub {
-  margin: 6px 0 0;
-  font-size: 12px;
-  color: var(--muted);
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-end;
 }
 
 .status-tag {
@@ -344,6 +347,23 @@ function formatDuration(ms: number) {
 
 .status-tag.idle {
   color: var(--muted);
+}
+
+.icon-btn {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 1px solid #e3ded7;
+  background: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.icon-btn:hover {
+  box-shadow: 0 6px 12px rgba(27, 27, 27, 0.12);
 }
 
 .drawer-input {
@@ -432,7 +452,7 @@ function formatDuration(ms: number) {
 .composer {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
 }
 
 .drawer-actions {
@@ -472,6 +492,8 @@ function formatDuration(ms: number) {
 
 .drawer-actions .btn {
   border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 11px;
 }
 
 .run-panel {
@@ -482,7 +504,7 @@ function formatDuration(ms: number) {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 220px;
+  max-height: 240px;
   overflow: hidden;
 }
 
@@ -539,7 +561,7 @@ function formatDuration(ms: number) {
 }
 
 .run-logs {
-  max-height: 110px;
+  max-height: 160px;
   overflow: auto;
   font-size: 11px;
   color: var(--muted);
@@ -549,9 +571,40 @@ function formatDuration(ms: number) {
   padding: 2px 0;
 }
 
+.run-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 15, 15, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 999;
+}
+
+.run-modal {
+  width: 360px;
+  max-width: 90vw;
+  background: var(--panel);
+  border-radius: var(--radius-lg);
+  border: 1px solid #e7dfd6;
+  box-shadow: 0 24px 40px rgba(27, 27, 27, 0.2);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.run-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  color: var(--ink);
+}
+
 @media (max-width: 1200px) {
   .chat-drawer.expanded {
-    width: 360px;
+    width: 420px;
   }
 }
 

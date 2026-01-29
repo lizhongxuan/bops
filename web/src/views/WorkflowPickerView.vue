@@ -2,11 +2,11 @@
   <section class="picker">
     <div class="picker-header">
       <div>
-        <h1>选择工作流</h1>
-        <p>从工作流库中选择一个开始编排、执行与追踪。</p>
+        <h1>选择工作区</h1>
+        <p>从工作区库中选择一个开始编排、执行与追踪。</p>
       </div>
       <div class="actions">
-        <button class="btn primary" type="button" @click="createWorkflow">新建工作流</button>
+        <button class="btn primary" type="button" @click="createWorkflow">新建工作区</button>
       </div>
     </div>
 
@@ -40,7 +40,7 @@
 
       <section class="panel list">
         <div class="panel-title">
-          <div>工作流库</div>
+          <div>工作区库</div>
           <div class="count">{{ filteredWorkflows.length }} 个</div>
         </div>
         <div class="grid">
@@ -67,7 +67,7 @@
               </div>
             </button>
             <div v-if="filteredWorkflows.length === 0" class="empty">
-              未找到匹配的工作流
+              未找到匹配的工作区
             </div>
           </template>
         </div>
@@ -113,11 +113,11 @@ const filteredWorkflows = computed(() => {
 function selectWorkflow(name: string) {
   localStorage.setItem("bops-last-workflow", name);
   recentWorkflow.value = name;
-  router.push(`/workflows/${name}`);
+  router.push({ path: "/", query: { workflow: name } });
 }
 
 async function createWorkflow() {
-  const raw = window.prompt("请输入工作流名称（字母/数字/短横线/下划线）");
+  const raw = window.prompt("请输入工作区名称（字母/数字/短横线/下划线）");
   if (!raw) return;
   const name = raw.trim();
   if (!/^[a-zA-Z0-9_-]+$/.test(name)) {
