@@ -64,56 +64,19 @@
           </div>
         </div>
       </aside>
-      <aside class="chat-pane">
-        <ChatDrawer
-          :selected-node="selectedNode"
-          :status="chatStatus"
-          :error="chatError"
-          :busy="chatBusy"
-          @generate="handleGenerate"
-          @fix="handleFix"
-          @regenerate="handleRegenerate"
-        />
-        <div class="run-panel">
-          <div class="run-head">
-            <span>运行状态</span>
-            <span class="run-status">{{ runStatus || "idle" }}</span>
-          </div>
-          <div v-if="runSummary" class="run-summary">
-            <div class="summary-row">
-              <span>状态</span>
-              <strong>{{ runSummary.status || "finished" }}</strong>
-            </div>
-            <div class="summary-row">
-              <span>步骤</span>
-              <span>{{ runSummary.successSteps }}/{{ runSummary.totalSteps }} 成功</span>
-            </div>
-            <div class="summary-row">
-              <span>失败</span>
-              <span>{{ runSummary.failedSteps }}</span>
-            </div>
-            <div class="summary-row">
-              <span>耗时</span>
-              <span>{{ formatDuration(runSummary.durationMs) }}</span>
-            </div>
-            <div v-if="runSummary.issues.length" class="summary-issues">
-              <div class="summary-label">问题列表</div>
-              <ul>
-                <li v-for="(issue, idx) in runSummary.issues" :key="idx">{{ issue }}</li>
-              </ul>
-            </div>
-            <div v-else-if="runSummary.message" class="summary-issues">
-              <div class="summary-label">信息</div>
-              <div class="summary-message">{{ runSummary.message }}</div>
-            </div>
-          </div>
-          <div class="run-logs">
-            <div v-if="!runLogs.length" class="muted">暂无日志</div>
-            <div v-for="(line, idx) in runLogs" :key="idx" class="log-line">{{ line }}</div>
-          </div>
-        </div>
-      </aside>
     </div>
+    <ChatDrawer
+      :selected-node="selectedNode"
+      :status="chatStatus"
+      :error="chatError"
+      :busy="chatBusy"
+      :run-status="runStatus"
+      :run-summary="runSummary"
+      :run-logs="runLogs"
+      @generate="handleGenerate"
+      @fix="handleFix"
+      @regenerate="handleRegenerate"
+    />
   </section>
 </template>
 
@@ -851,12 +814,47 @@ function formatRunEventLine(eventName: string, payload: any, eventData: Record<s
   flex-direction: column;
   gap: 16px;
   padding: 18px;
+  position: relative;
+  flex: 1;
+  min-height: 0;
 }
 
 .workbench-topbar {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.workbench-topbar .btn {
+  border-radius: 999px;
+  border-color: transparent;
+  background: #f2ede7;
+  color: var(--ink);
+  box-shadow: 0 8px 16px rgba(27, 27, 27, 0.08);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.workbench-topbar .btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 18px rgba(27, 27, 27, 0.12);
+}
+
+.workbench-topbar .btn.ghost {
+  background: #ffffff;
+  border: 1px solid #e3ded7;
+  color: var(--muted);
+  box-shadow: none;
+}
+
+.workbench-topbar .btn.ghost:hover {
+  box-shadow: 0 8px 16px rgba(27, 27, 27, 0.08);
+  color: var(--ink);
+}
+
+.workbench-topbar .btn.btn-sm {
+  padding: 6px 14px;
 }
 
 .status-chip {
@@ -870,17 +868,19 @@ function formatRunEventLine(eventName: string, payload: any, eventData: Record<s
 
 .workbench-body {
   display: grid;
-  grid-template-columns: 280px minmax(0, 1fr) 320px;
+  grid-template-columns: 280px minmax(0, 1fr);
   gap: 16px;
-  min-height: 70vh;
+  flex: 1;
+  min-height: 0;
 }
 
 .workbench-body.detail-open {
-  grid-template-columns: 280px minmax(0, 1fr) 280px 320px;
+  grid-template-columns: 280px minmax(0, 1fr) 280px;
 }
 
 .library-pane {
   height: 100%;
+  min-height: 0;
 }
 
 .canvas {
@@ -889,7 +889,8 @@ function formatRunEventLine(eventName: string, payload: any, eventData: Record<s
   border-radius: var(--radius-lg);
   border: 1px solid #ddd6ce;
   overflow: hidden;
-  min-height: 70vh;
+  min-height: 0;
+  height: 100%;
 }
 
 .canvas-grid {
@@ -938,86 +939,7 @@ function formatRunEventLine(eventName: string, payload: any, eventData: Record<s
   display: flex;
   flex-direction: column;
   gap: 12px;
-}
-
-.chat-pane {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.run-panel {
-  background: var(--panel);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow);
-  padding: 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.run-head {
-  display: flex;
-  justify-content: space-between;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.run-status {
-  color: var(--ink);
-}
-
-.run-summary {
-  border: 1px solid var(--grid);
-  border-radius: var(--radius-md);
-  padding: 8px 10px;
-  background: #f7f4ef;
-  font-size: 11px;
-  color: var(--muted);
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.run-summary strong {
-  color: var(--ink);
-  font-weight: 600;
-}
-
-.summary-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.summary-issues ul {
-  margin: 4px 0 0;
-  padding-left: 14px;
-}
-
-.summary-issues li {
-  line-height: 1.4;
-}
-
-.summary-label {
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.summary-message {
-  color: var(--ink);
-}
-
-.run-logs {
-  max-height: 180px;
-  overflow: auto;
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.log-line {
-  padding: 2px 0;
+  min-height: 0;
 }
 
 .detail-head {
@@ -1076,7 +998,8 @@ function formatRunEventLine(eventName: string, payload: any, eventData: Record<s
     grid-template-columns: 1fr;
   }
   .canvas {
-    min-height: 60vh;
+    min-height: 0;
+    height: 60vh;
   }
 }
 </style>
