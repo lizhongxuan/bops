@@ -7,10 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"bops/internal/ai"
 	"bops/internal/aistore"
+	"bops/internal/aiworkflow"
 	"bops/internal/envstore"
 	"bops/internal/workflowstore"
 )
@@ -47,8 +49,13 @@ func TestAIWorkflowGenerate(t *testing.T) {
 	srv := newTestServer(t)
 	stub := &stubAI{reply: "```yaml\nversion: v0.1\nname: demo\nsteps:\n  - name: ok\n    action: cmd.run\n    with:\n      cmd: \"echo hi\"\n```"}
 	srv.aiClient = stub
+	srv.aiWorkflow, _ = aiworkflow.New(aiworkflow.Config{
+		Client:       stub,
+		SystemPrompt: "test prompt",
+		MaxRetries:   1,
+	})
 
-	body := bytes.NewBufferString(`{"prompt":"hello"}`)
+	body := bytes.NewBufferString(`{"prompt":"install nginx on web hosts"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/ai/workflow/generate", body)
 	w := httptest.NewRecorder()
 
@@ -72,8 +79,8 @@ func TestAIWorkflowGenerate(t *testing.T) {
 	if stub.last[0].Role != "system" {
 		t.Fatalf("expected system prompt to be included")
 	}
-	if stub.last[len(stub.last)-1].Content != "hello" {
-		t.Fatalf("expected user prompt to be last message")
+	if !strings.Contains(stub.last[len(stub.last)-1].Content, "install nginx on web hosts") {
+		t.Fatalf("expected user prompt to be included in last message")
 	}
 }
 

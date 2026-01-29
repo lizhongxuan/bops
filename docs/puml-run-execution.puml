@@ -1,0 +1,14 @@
+@startuml
+actor 用户 as User
+participant "工作台 UI" as UI
+participant "运行 API" as API
+participant "工作流执行器" as Runner
+
+User -> UI: 点击运行
+UI -> API: POST /api/runs/workflow
+API -> Runner: 启动执行
+Runner --> API: 步骤事件 (start/end/failed/agent_output)
+API --> UI: SSE 事件 (/api/runs/{id}/stream)
+UI -> UI: 更新节点状态 + 日志面板
+UI --> User: 运行结果 + 摘要
+@enduml

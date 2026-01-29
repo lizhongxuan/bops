@@ -27,6 +27,7 @@ type Draft struct {
 	Title     string     `json:"title" yaml:"title"`
 	Prompt    string     `json:"prompt" yaml:"prompt"`
 	YAML      string     `json:"yaml" yaml:"yaml"`
+	Graph     string     `json:"graph" yaml:"graph"`
 	Summary   string     `json:"summary" yaml:"summary"`
 	Issues    []string   `json:"issues" yaml:"issues"`
 	RiskLevel string     `json:"risk_level" yaml:"risk_level"`
@@ -176,6 +177,9 @@ func (s *Store) Save(input Draft) (Draft, error) {
 
 	if strings.TrimSpace(input.YAML) != "" {
 		draft.YAML = input.YAML
+	}
+	if strings.TrimSpace(input.Graph) != "" {
+		draft.Graph = input.Graph
 	}
 	if strings.TrimSpace(input.Summary) != "" {
 		draft.Summary = input.Summary

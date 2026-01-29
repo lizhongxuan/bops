@@ -17,6 +17,7 @@ import (
 	"bops/internal/envstore"
 	"bops/internal/eventbus"
 	"bops/internal/logging"
+	"bops/internal/nodetemplate"
 	"bops/internal/runmanager"
 	"bops/internal/scriptstore"
 	"bops/internal/skills"
@@ -43,6 +44,7 @@ type Server struct {
 	aiWorkflowStore *aiworkflowstore.Store
 	validationStore *validationenv.Store
 	scriptStore     *scriptstore.Store
+	nodeTemplates   *nodetemplate.Store
 	engine          *engine.Engine
 	runs            *runmanager.Manager
 	bus             *eventbus.Bus
@@ -65,6 +67,7 @@ func New(cfg config.Config, configPath string) *Server {
 	})
 	prompt := ai.LoadPrompt(filepath.Join("docs", "prompt-workflow.md"))
 	scriptStore := scriptstore.New(filepath.Join(cfg.DataDir, "scripts"))
+	nodeTemplateStore := nodetemplate.New(filepath.Join(cfg.DataDir, "node_templates"))
 	aiWorkflowStore := aiworkflowstore.New(filepath.Join(cfg.DataDir, "ai_workflows"))
 	var aiWorkflow *aiworkflow.Pipeline
 	if aiClient != nil {
@@ -98,6 +101,7 @@ func New(cfg config.Config, configPath string) *Server {
 		aiWorkflowStore: aiWorkflowStore,
 		validationStore: validationenv.NewStore(filepath.Join(cfg.DataDir, "validation_envs")),
 		scriptStore:     scriptStore,
+		nodeTemplates:   nodeTemplateStore,
 		engine:          engine.New(defaultRegistry(scriptStore)),
 		runs:            runmanager.NewWithBus(state.NewFileStore(cfg.StatePath), bus),
 		bus:             bus,

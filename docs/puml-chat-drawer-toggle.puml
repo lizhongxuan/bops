@@ -1,0 +1,10 @@
+@startuml
+actor 用户 as User
+participant "工作台 UI" as UI
+participant "本地存储" as Store
+
+User -> UI: 点击折叠/展开
+UI -> UI: 切换抽屉状态
+UI -> Store: 持久化抽屉状态
+Store --> UI: OK
+@enduml

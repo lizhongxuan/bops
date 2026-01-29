@@ -63,10 +63,10 @@ func (p *Pipeline) generate(ctx context.Context, state *State) (*State, error) {
 		emitEvent(state, "generator", "error", err.Error())
 		return state, err
 	}
-	prompt := buildGeneratePrompt(state.Prompt, state.ContextText, state.BaseYAML)
+	planPrompt := buildPlanPrompt(state.Prompt, state.ContextText, state.BaseYAML)
 	messages := []ai.Message{
 		{Role: "system", Content: state.SystemPrompt},
-		{Role: "user", Content: prompt},
+		{Role: "user", Content: planPrompt},
 	}
 	reply, thought, err := p.chatWithThought(ctx, messages, state.StreamSink)
 	if err != nil {
@@ -77,15 +77,56 @@ func (p *Pipeline) generate(ctx context.Context, state *State) (*State, error) {
 	if state.Thought != "" {
 		logging.L().Debug("aiworkflow generate thought captured", zap.Int("thought_len", len(state.Thought)))
 	}
-	yamlText, questions, err := extractWorkflowYAML(reply)
+	planYAML, planQuestions, err := extractWorkflowYAML(reply)
 	if err != nil {
 		emitEvent(state, "generator", "error", err.Error())
 		return state, err
 	}
-	if strings.TrimSpace(state.BaseYAML) != "" {
-		yamlText = mergeStepsIntoBase(state.BaseYAML, yamlText)
+
+	finalYAML := planYAML
+	questions := planQuestions
+
+	if strings.TrimSpace(planYAML) != "" {
+		if wf, err := workflow.Load([]byte(planYAML)); err == nil && shouldOptimizePlan(wf) {
+			complexSteps := detectComplexSteps(wf)
+			if len(complexSteps) > 0 {
+				optPrompt := buildOptimizePrompt(planYAML, complexSteps)
+				optMessages := []ai.Message{
+					{Role: "system", Content: state.SystemPrompt},
+					{Role: "user", Content: optPrompt},
+				}
+				optReply, _, optErr := p.chatWithThought(ctx, optMessages, state.StreamSink)
+				if optErr != nil {
+					state.GenerationNotice = "复杂步骤优化失败，已保留规划步骤"
+				} else if optYAML, optQuestions, optErr := extractWorkflowYAML(optReply); optErr == nil && strings.TrimSpace(optYAML) != "" {
+					finalYAML = optYAML
+					questions = mergeQuestions(questions, optQuestions)
+					if strings.TrimSpace(finalYAML) != strings.TrimSpace(planYAML) {
+						state.History = append(state.History, planYAML)
+					}
+				} else {
+					state.GenerationNotice = "复杂步骤优化失败，已保留规划步骤"
+				}
+			}
+		}
 	}
-	state.YAML = yamlText
+
+	if strings.TrimSpace(state.BaseYAML) != "" {
+		finalYAML = mergeStepsIntoBase(state.BaseYAML, finalYAML)
+	}
+	quality := applyQualityGuardYAML(finalYAML)
+	if strings.TrimSpace(quality.YAML) != "" {
+		finalYAML = quality.YAML
+	}
+	if len(quality.Notices) > 0 {
+		notice := strings.Join(quality.Notices, "; ")
+		if strings.TrimSpace(state.GenerationNotice) == "" {
+			state.GenerationNotice = notice
+		} else {
+			state.GenerationNotice = state.GenerationNotice + "; " + notice
+		}
+	}
+	state.YAML = finalYAML
 	state.Questions = mergeQuestions(state.Questions, questions)
 	emitEvent(state, "generator", "done", "")
 	logging.L().Debug("aiworkflow generate done",
@@ -134,7 +175,10 @@ func (p *Pipeline) fix(ctx context.Context, state *State) (*State, error) {
 		yamlText = mergeStepsIntoBase(state.BaseYAML, yamlText)
 	}
 	if strings.TrimSpace(yamlText) != "" {
-		state.History = append(state.History, state.YAML)
+		if strings.TrimSpace(state.YAML) != "" {
+			state.History = append(state.History, state.YAML)
+			state.AutoFixDiffs = append(state.AutoFixDiffs, diffSummary(state.YAML, yamlText))
+		}
 		state.YAML = yamlText
 	}
 	state.Questions = mergeQuestions(state.Questions, questions)
@@ -238,10 +282,41 @@ func (p *Pipeline) summarize(_ context.Context, state *State) (*State, error) {
 	emitEvent(state, "summarizer", "start", "")
 	steps := countSteps(state.YAML)
 	issues := len(state.Issues)
-	state.Summary = fmt.Sprintf("steps=%d risk=%s issues=%d", steps, state.RiskLevel, issues)
+	notice := strings.TrimSpace(state.GenerationNotice)
+	if notice != "" {
+		state.Summary = fmt.Sprintf("steps=%d risk=%s issues=%d note=%s", steps, state.RiskLevel, issues, notice)
+	} else {
+		state.Summary = fmt.Sprintf("steps=%d risk=%s issues=%d", steps, state.RiskLevel, issues)
+	}
 	emitEvent(state, "summarizer", "done", state.Summary)
 	logging.L().Debug("aiworkflow summarize done", zap.String("summary", state.Summary))
 	return state, nil
+}
+
+func diffSummary(prev, next string) string {
+	if strings.TrimSpace(prev) == "" {
+		return "initial"
+	}
+	prevLines := strings.Split(prev, "\n")
+	nextLines := strings.Split(next, "\n")
+	added := 0
+	removed := 0
+	max := len(prevLines)
+	if len(nextLines) > max {
+		max = len(nextLines)
+	}
+	for i := 0; i < max; i++ {
+		switch {
+		case i >= len(prevLines):
+			added++
+		case i >= len(nextLines):
+			removed++
+		case prevLines[i] != nextLines[i]:
+			added++
+			removed++
+		}
+	}
+	return fmt.Sprintf("+%d/-%d", added, removed)
 }
 
 func (p *Pipeline) humanGate(_ context.Context, state *State) (*State, error) {

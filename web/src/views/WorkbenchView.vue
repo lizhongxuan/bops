@@ -1,0 +1,1109 @@
+<template>
+  <section class="workbench">
+    <header class="workbench-bar">
+      <div class="bar-left">
+        <h2>工作台</h2>
+        <span class="bar-sub">拖拽模板到画布，生成节点</span>
+      </div>
+      <div class="bar-status">
+        <span class="status-chip">运行进度 0.00%</span>
+      </div>
+      <div class="bar-actions">
+        <button class="btn btn-sm ghost" type="button" @click="autoLayout">自动布局</button>
+        <button class="btn btn-sm" type="button" @click="handleAutoFix">校验</button>
+        <button class="btn btn-sm" type="button" @click="handleRun">运行</button>
+        <button class="btn btn-sm ghost">保存</button>
+      </div>
+    </header>
+
+    <div class="workbench-body">
+      <aside class="library-pane">
+        <NodeLibraryPanel />
+      </aside>
+
+      <main
+        ref="canvasRef"
+        class="canvas"
+        @dragover.prevent
+        @drop="handleDrop"
+      >
+        <div class="canvas-grid"></div>
+        <div class="canvas-hint">拖拽左侧模板到画布</div>
+        <div
+          v-for="node in nodes"
+          :key="node.id"
+          class="canvas-node"
+          :style="{ left: `${node.x}px`, top: `${node.y}px` }"
+          @click="selectNode(node)"
+        >
+          <div class="node-title">{{ node.name }}</div>
+          <div class="node-action">{{ node.action }}</div>
+          <button class="node-remove" type="button" @click.stop="removeNode(node.id)">×</button>
+        </div>
+      </main>
+
+      <aside class="detail-pane" v-if="selectedNode">
+        <div class="detail-head">
+          <h3>节点详情</h3>
+          <button class="btn ghost btn-sm" type="button" @click="selectedNodeId = null">关闭</button>
+        </div>
+        <div class="detail-body">
+          <label class="field">
+            <span>名称</span>
+            <input v-model="selectedNode.name" type="text" />
+          </label>
+          <label class="field">
+            <span>Action</span>
+            <input v-model="selectedNode.action" type="text" />
+          </label>
+          <label class="field">
+            <span>Targets</span>
+            <input v-model="targetsInput" type="text" placeholder="web, db" />
+          </label>
+          <label class="field">
+            <span>With JSON</span>
+            <textarea v-model="withInput" rows="4" placeholder='{ "name": "nginx" }'></textarea>
+          </label>
+          <div class="detail-actions">
+            <button class="btn btn-sm" type="button" @click="applyDetail">应用</button>
+            <button class="btn btn-sm ghost" type="button" @click="resetDetail">重置</button>
+          </div>
+        </div>
+      </aside>
+      <aside class="chat-pane">
+        <ChatDrawer
+          :selected-node="selectedNode"
+          :status="chatStatus"
+          :error="chatError"
+          :busy="chatBusy"
+          @generate="handleGenerate"
+          @fix="handleFix"
+          @regenerate="handleRegenerate"
+        />
+        <div class="run-panel">
+          <div class="run-head">
+            <span>运行状态</span>
+            <span class="run-status">{{ runStatus || "idle" }}</span>
+          </div>
+          <div v-if="runSummary" class="run-summary">
+            <div class="summary-row">
+              <span>状态</span>
+              <strong>{{ runSummary.status || "finished" }}</strong>
+            </div>
+            <div class="summary-row">
+              <span>步骤</span>
+              <span>{{ runSummary.successSteps }}/{{ runSummary.totalSteps }} 成功</span>
+            </div>
+            <div class="summary-row">
+              <span>失败</span>
+              <span>{{ runSummary.failedSteps }}</span>
+            </div>
+            <div class="summary-row">
+              <span>耗时</span>
+              <span>{{ formatDuration(runSummary.durationMs) }}</span>
+            </div>
+            <div v-if="runSummary.issues.length" class="summary-issues">
+              <div class="summary-label">问题列表</div>
+              <ul>
+                <li v-for="(issue, idx) in runSummary.issues" :key="idx">{{ issue }}</li>
+              </ul>
+            </div>
+            <div v-else-if="runSummary.message" class="summary-issues">
+              <div class="summary-label">信息</div>
+              <div class="summary-message">{{ runSummary.message }}</div>
+            </div>
+          </div>
+          <div class="run-logs">
+            <div v-if="!runLogs.length" class="muted">暂无日志</div>
+            <div v-for="(line, idx) in runLogs" :key="idx" class="log-line">{{ line }}</div>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </section>
+</template>
+
+<script setup lang="ts">
+import { computed, ref, watch } from "vue";
+import NodeLibraryPanel, { type TemplateSummary } from "../components/NodeLibraryPanel.vue";
+import ChatDrawer from "../components/ChatDrawer.vue";
+import { apiBase, request } from "../lib/api";
+
+type RunSummary = {
+  status: string;
+  totalSteps: number;
+  successSteps: number;
+  failedSteps: number;
+  durationMs: number;
+  issues: string[];
+  message?: string;
+};
+
+const canvasRef = ref<HTMLElement | null>(null);
+const nodes = ref<
+  Array<{
+    id: string;
+    name: string;
+    action: string;
+    with?: Record<string, unknown>;
+    targets?: string[];
+    x: number;
+    y: number;
+  }>
+>([]);
+let nodeIndex = 0;
+const selectedNodeId = ref<string | null>(null);
+const withInput = ref("");
+const targetsInput = ref("");
+const chatStatus = ref("");
+const chatError = ref("");
+const chatBusy = ref(false);
+const draftId = ref("");
+const yamlText = ref("");
+const autoFixRunning = ref(false);
+const runId = ref("");
+const runLogs = ref<string[]>([]);
+const runStatus = ref("");
+const runSummary = ref<RunSummary | null>(null);
+let draftSaveTimer: number | null = null;
+let lastSavedYaml = "";
+let lastSavedGraph = "";
+
+const selectedNode = computed(() => {
+  if (!selectedNodeId.value) return null;
+  return nodes.value.find((node) => node.id === selectedNodeId.value) || null;
+});
+
+function handleDrop(event: DragEvent) {
+  if (!event.dataTransfer || !canvasRef.value) return;
+  const raw = event.dataTransfer.getData("application/json");
+  if (!raw) return;
+  let template: TemplateSummary | null = null;
+  try {
+    template = JSON.parse(raw) as TemplateSummary;
+  } catch {
+    template = null;
+  }
+  if (!template) return;
+
+  const rect = canvasRef.value.getBoundingClientRect();
+  const x = event.clientX - rect.left;
+  const y = event.clientY - rect.top;
+
+  const id = `node-${Date.now()}-${nodeIndex++}`;
+  const nodeSpec = template.node || {};
+  nodes.value.push({
+    id,
+    name: nodeSpec.name || template.name || "未命名节点",
+    action: nodeSpec.action || template.action || "",
+    with: nodeSpec.with || {},
+    targets: nodeSpec.targets || [],
+    x: Math.max(20, x - 60),
+    y: Math.max(20, y - 20)
+  });
+  syncYamlFromNodes();
+  scheduleDraftSave("drop");
+}
+
+function selectNode(node: { id: string }) {
+  selectedNodeId.value = node.id;
+}
+
+function removeNode(id: string) {
+  nodes.value = nodes.value.filter((node) => node.id !== id);
+  if (selectedNodeId.value === id) {
+    selectedNodeId.value = null;
+  }
+  syncYamlFromNodes();
+  scheduleDraftSave("remove");
+}
+
+function applyDetail() {
+  if (!selectedNode.value) return;
+  try {
+    const parsed = withInput.value.trim() ? JSON.parse(withInput.value) : {};
+    selectedNode.value.with = parsed;
+  } catch {
+    // ignore invalid json
+  }
+  selectedNode.value.targets = targetsInput.value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  syncYamlFromNodes();
+  scheduleDraftSave("detail");
+}
+
+function resetDetail() {
+  if (!selectedNode.value) return;
+  withInput.value = JSON.stringify(selectedNode.value.with || {}, null, 2);
+  targetsInput.value = (selectedNode.value.targets || []).join(", ");
+}
+
+watch(selectedNode, (node) => {
+  if (!node) return;
+  withInput.value = JSON.stringify(node.with || {}, null, 2);
+  targetsInput.value = (node.targets || []).join(", ");
+});
+
+function autoLayout() {
+  if (!canvasRef.value || nodes.value.length === 0) return;
+  const rect = canvasRef.value.getBoundingClientRect();
+  const paddingX = 32;
+  const paddingY = 32;
+  const nodeWidth = 180;
+  const nodeHeight = 90;
+  const gapX = 40;
+  const gapY = 30;
+  const availableWidth = Math.max(rect.width - paddingX * 2, nodeWidth);
+  const columns = Math.max(1, Math.floor(availableWidth / (nodeWidth + gapX)));
+
+  nodes.value = nodes.value.map((node, index) => {
+    const col = index % columns;
+    const row = Math.floor(index / columns);
+    return {
+      ...node,
+      x: paddingX + col * (nodeWidth + gapX),
+      y: paddingY + row * (nodeHeight + gapY)
+    };
+  });
+  scheduleDraftSave("layout");
+}
+
+function buildYamlFromNodes() {
+  if (!nodes.value.length) return "";
+  const lines: string[] = ["version: v0.1", "name: draft-workbench", "steps:"];
+  nodes.value.forEach((node) => {
+    lines.push(`  - name: ${yamlScalar(node.name)}`);
+    if (node.action) {
+      lines.push(`    action: ${yamlScalar(node.action)}`);
+    }
+    if (node.targets && node.targets.length) {
+      lines.push(`    targets: ${JSON.stringify(node.targets)}`);
+    }
+    const withValue = node.with && Object.keys(node.with).length ? node.with : null;
+    if (withValue) {
+      lines.push(`    with: ${JSON.stringify(withValue)}`);
+    }
+  });
+  return lines.join("\n");
+}
+
+function syncYamlFromNodes() {
+  yamlText.value = buildYamlFromNodes();
+}
+
+function yamlScalar(value: string) {
+  if (!value) return "\"\"";
+  if (/[:#\n]/.test(value)) {
+    return JSON.stringify(value);
+  }
+  return value;
+}
+
+function normalizeYamlText(value: string) {
+  return value
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trim();
+}
+
+function stableStringify(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+  }
+  if (typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record).sort();
+    return `{${keys.map((key) => `${key}:${stableStringify(record[key])}`).join(",")}}`;
+  }
+  return String(value);
+}
+
+function stepsSignatureFromNodes() {
+  const steps = nodes.value.map((node) => ({
+    name: node.name || "",
+    action: node.action || "",
+    targets: node.targets || [],
+    with: stableStringify(node.with || {})
+  }));
+  return JSON.stringify(steps);
+}
+
+function stepsSignatureFromGraph(graph: any) {
+  const graphNodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+  const steps = graphNodes.map((node: any) => ({
+    name: String(node?.name || ""),
+    action: String(node?.action || ""),
+    targets: Array.isArray(node?.targets) ? node.targets : [],
+    with: stableStringify(node?.with || {})
+  }));
+  return JSON.stringify(steps);
+}
+
+function buildGraphFromNodes() {
+  const graphNodes = nodes.value.map((node, idx) => ({
+    id: node.id,
+    type: "action",
+    name: node.name || `node-${idx + 1}`,
+    action: node.action || "",
+    with: node.with || {},
+    targets: node.targets || [],
+    ui: { x: node.x, y: node.y }
+  }));
+  const edges = graphNodes.slice(1).map((node, idx) => ({
+    id: `edge-${idx + 1}`,
+    source: graphNodes[idx].id,
+    target: node.id
+  }));
+  return {
+    version: "v1",
+    layout: { direction: "LR" },
+    nodes: graphNodes,
+    edges
+  };
+}
+
+function ensureDraftId() {
+  if (draftId.value) return draftId.value;
+  const fallback = `draft-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+  const id =
+    typeof crypto !== "undefined" && "randomUUID" in crypto
+      ? `draft-${crypto.randomUUID()}`
+      : fallback;
+  draftId.value = id;
+  return id;
+}
+
+function scheduleDraftSave(reason?: string) {
+  if (draftSaveTimer) {
+    window.clearTimeout(draftSaveTimer);
+  }
+  draftSaveTimer = window.setTimeout(() => {
+    void saveDraft(reason);
+  }, 600);
+}
+
+async function saveDraft(_reason?: string) {
+  const yaml = yamlText.value || buildYamlFromNodes();
+  if (!yaml.trim()) return;
+  const graph = buildGraphFromNodes();
+  const graphText = JSON.stringify(graph);
+  if (
+    normalizeYamlText(yaml) === normalizeYamlText(lastSavedYaml) &&
+    graphText === lastSavedGraph
+  ) {
+    return;
+  }
+  const id = ensureDraftId();
+  try {
+    const resp = await request<{ draft?: { id?: string } }>(`/ai/workflow/draft/${id}`, {
+      method: "PUT",
+      body: { id, yaml, graph }
+    });
+    if (resp?.draft?.id) {
+      draftId.value = resp.draft.id;
+    }
+    lastSavedYaml = yaml;
+    lastSavedGraph = graphText;
+  } catch {
+    // ignore auto-save errors
+  }
+}
+
+async function fetchGraphFromYaml(yaml: string) {
+  if (!yaml.trim()) return null;
+  try {
+    const resp = await request<{ graph: any }>("/ai/workflow/graph-from-yaml", {
+      method: "POST",
+      body: { yaml }
+    });
+    return resp.graph || null;
+  } catch {
+    return null;
+  }
+}
+
+async function resolveGraphYamlConflict(draftYaml: string, graphYaml: string) {
+  const useYaml = window.confirm(
+    "检测到草稿 YAML 与图不一致，是否以 YAML 覆盖图？点击取消将以图覆盖 YAML。"
+  );
+  if (useYaml) {
+    yamlText.value = draftYaml;
+    const graph = await fetchGraphFromYaml(draftYaml);
+    if (graph) {
+      applyGraph(graph);
+      await saveDraft("yaml-override");
+    } else {
+      chatError.value = "无法根据 YAML 生成图，请稍后重试。";
+    }
+  } else {
+    yamlText.value = graphYaml;
+    await saveDraft("graph-override");
+  }
+}
+
+async function handleGenerate(prompt: string) {
+  chatError.value = "";
+  chatStatus.value = "";
+  if (!prompt.trim()) {
+    chatError.value = "请输入需求后再生成。";
+    return;
+  }
+  chatBusy.value = true;
+  chatStatus.value = "正在生成流程...";
+  try {
+    const data = await request<{ yaml: string; draft_id?: string; message?: string }>(
+      "/ai/workflow/generate",
+      {
+        method: "POST",
+        body: { prompt }
+      }
+    );
+    yamlText.value = data.yaml || "";
+    draftId.value = data.draft_id || "";
+    await syncGraphFromDraft();
+    scheduleDraftSave("generate");
+    chatStatus.value = data.message || "生成完成";
+  } catch (err) {
+    chatError.value = "生成失败，请稍后重试。";
+  } finally {
+    chatBusy.value = false;
+  }
+}
+
+async function handleFix() {
+  chatError.value = "";
+  chatStatus.value = "";
+  const yaml = yamlText.value || buildYamlFromNodes();
+  if (!yaml.trim()) {
+    chatError.value = "当前没有可修复的流程。";
+    return;
+  }
+  chatBusy.value = true;
+  chatStatus.value = "正在检查问题...";
+  try {
+    const summary = await request<{
+      issues: string[];
+      summary: string;
+    }>("/ai/workflow/summary", { method: "POST", body: { yaml } });
+    if (!summary.issues || summary.issues.length === 0) {
+      chatStatus.value = "未发现问题，无需修复。";
+      return;
+    }
+    chatStatus.value = "正在修复流程...";
+    const fixed = await request<{ yaml: string; draft_id?: string; message?: string }>(
+      "/ai/workflow/fix",
+      {
+        method: "POST",
+        body: { yaml, issues: summary.issues }
+      }
+    );
+    yamlText.value = fixed.yaml || yamlText.value;
+    draftId.value = fixed.draft_id || draftId.value;
+    await syncGraphFromDraft();
+    scheduleDraftSave("fix");
+    chatStatus.value = fixed.message || "修复完成";
+  } catch (err) {
+    chatError.value = "修复失败，请稍后重试。";
+  } finally {
+    chatBusy.value = false;
+  }
+}
+
+async function handleRegenerate(prompt: string) {
+  chatError.value = "";
+  chatStatus.value = "";
+  if (!selectedNode.value) {
+    chatError.value = "请先选择节点。";
+    return;
+  }
+  const yaml = yamlText.value || buildYamlFromNodes();
+  if (!yaml.trim()) {
+    chatError.value = "当前没有可重生成的流程。";
+    return;
+  }
+  chatBusy.value = true;
+  chatStatus.value = "正在重生成节点...";
+  try {
+    const index = nodes.value.findIndex((node) => node.id === selectedNode.value?.id);
+    const prev = index > 0 ? [nodes.value[index - 1]] : [];
+    const next = index >= 0 && index < nodes.value.length - 1 ? [nodes.value[index + 1]] : [];
+    const resp = await request<{ yaml: string; graph?: any; message?: string }>(
+      "/ai/workflow/node-regenerate",
+      {
+        method: "POST",
+        body: {
+          node: {
+            id: selectedNode.value.id,
+            index,
+            name: selectedNode.value.name,
+            action: selectedNode.value.action,
+            with: selectedNode.value.with || {},
+            targets: selectedNode.value.targets || []
+          },
+          neighbors: {
+            prev: prev.map((item) => ({ name: item.name, action: item.action })),
+            next: next.map((item) => ({ name: item.name, action: item.action }))
+          },
+          workflow: { yaml },
+          intent: prompt
+        }
+      }
+    );
+    if (resp.yaml) {
+      yamlText.value = resp.yaml;
+    }
+    if (resp.graph) {
+      applyGraph(resp.graph);
+    } else {
+      await syncGraphFromDraft();
+    }
+    scheduleDraftSave("regenerate");
+    chatStatus.value = resp.message || "节点已更新";
+  } catch (err) {
+    chatError.value = "重生成失败，请稍后重试。";
+  } finally {
+    chatBusy.value = false;
+  }
+}
+
+async function handleAutoFix() {
+  chatError.value = "";
+  chatStatus.value = "";
+  const yaml = yamlText.value || buildYamlFromNodes();
+  if (!yaml.trim()) {
+    chatError.value = "当前没有可校验的流程。";
+    return;
+  }
+  if (autoFixRunning.value) return;
+  autoFixRunning.value = true;
+  chatBusy.value = true;
+  chatStatus.value = "正在校验与修复...";
+
+  try {
+    const response = await fetch(`${apiBase()}/ai/workflow/auto-fix-run`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ yaml, max_retries: 2 })
+    });
+    if (!response.ok || !response.body) {
+      chatError.value = "校验启动失败。";
+      return;
+    }
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let buffer = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() || "";
+      for (const part of parts) {
+        const lines = part.split("\n");
+        let eventName = "";
+        let data = "";
+        for (const line of lines) {
+          if (line.startsWith("event:")) {
+            eventName = line.replace("event:", "").trim();
+          } else if (line.startsWith("data:")) {
+            data += line.replace("data:", "").trim();
+          }
+        }
+        if (!data) continue;
+        try {
+          const payload = JSON.parse(data);
+          if (eventName === "status") {
+            chatStatus.value = payload.message || "运行中...";
+          } else if (eventName === "result") {
+            if (typeof payload.yaml === "string") {
+              yamlText.value = payload.yaml;
+            }
+            if (payload.draft_id) {
+              draftId.value = String(payload.draft_id);
+            }
+            await syncGraphFromDraft();
+            if (Array.isArray(payload.diffs) && payload.diffs.length) {
+              chatStatus.value = `${payload.summary || "校验完成"}; 修复差异: ${payload.diffs.join(", ")}`;
+            } else {
+              chatStatus.value = payload.summary || "校验完成";
+            }
+            if (Array.isArray(payload.issues) && payload.issues.length) {
+              runLogs.value.push(`[issues] ${payload.issues.join("; ")}`);
+            }
+            scheduleDraftSave("auto-fix");
+          } else if (eventName === "error") {
+            chatError.value = payload.error || "校验失败";
+          }
+        } catch {
+          // ignore parse errors
+        }
+      }
+    }
+  } catch (err) {
+    chatError.value = "校验失败，请稍后重试。";
+  } finally {
+    autoFixRunning.value = false;
+    chatBusy.value = false;
+  }
+}
+
+async function handleRun() {
+  chatError.value = "";
+  chatStatus.value = "";
+  const yaml = yamlText.value || buildYamlFromNodes();
+  if (!yaml.trim()) {
+    chatError.value = "当前没有可运行的流程。";
+    return;
+  }
+  chatBusy.value = true;
+  runLogs.value = [];
+  runSummary.value = null;
+  runStatus.value = "running";
+  try {
+    const resp = await request<{ run_id: string; status: string }>("/runs/workflow", {
+      method: "POST",
+      body: { yaml }
+    });
+    runId.value = resp.run_id;
+    runStatus.value = resp.status;
+    await subscribeRunStream(resp.run_id);
+  } catch (err) {
+    chatError.value = "运行启动失败。";
+    runStatus.value = "failed";
+  } finally {
+    chatBusy.value = false;
+  }
+}
+
+async function subscribeRunStream(id: string) {
+  const response = await fetch(`${apiBase()}/runs/${id}/stream`);
+  if (!response.body) return;
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split("\n\n");
+    buffer = parts.pop() || "";
+    for (const part of parts) {
+      const lines = part.split("\n");
+      let eventName = "";
+      let data = "";
+      for (const line of lines) {
+        if (line.startsWith("event:")) {
+          eventName = line.replace("event:", "").trim();
+        } else if (line.startsWith("data:")) {
+          data += line.replace("data:", "").trim();
+        }
+      }
+      if (!data) continue;
+      try {
+        const payload = JSON.parse(data);
+        const eventData =
+          payload && typeof payload === "object" && payload.data && typeof payload.data === "object"
+            ? payload.data
+            : {};
+        if (eventName === "workflow_start") {
+          const status = String(eventData.status || payload.status || "running");
+          runStatus.value = status;
+          runLogs.value.push(`[workflow_start] ${status}`);
+          continue;
+        }
+        if (eventName === "workflow_end") {
+          const summary: RunSummary = {
+            status: String(eventData.status || payload.status || "finished"),
+            totalSteps: Number(eventData.total_steps || 0),
+            successSteps: Number(eventData.success_steps || 0),
+            failedSteps: Number(eventData.failed_steps || 0),
+            durationMs: Number(eventData.duration_ms || 0),
+            issues: Array.isArray(eventData.issues)
+              ? eventData.issues.map((item: unknown) => String(item))
+              : [],
+            message: String(eventData.message || payload.message || "")
+          };
+          runSummary.value = summary;
+          runStatus.value = summary.status || "finished";
+          runLogs.value.push(`[summary] ${formatSummaryLine(summary)}`);
+          if (summary.issues.length) {
+            runLogs.value.push(`[issues] ${summary.issues.join("; ")}`);
+          }
+        } else {
+          const line = formatRunEventLine(eventName, payload, eventData);
+          if (line) {
+            runLogs.value.push(line);
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+  }
+}
+
+async function syncGraphFromDraft() {
+  if (!draftId.value) {
+    await applyGraphFromYamlFallback();
+    return;
+  }
+  try {
+    const draft = await request<{ draft: { graph?: any; yaml?: string } }>(
+      `/ai/workflow/draft/${draftId.value}`
+    );
+    const draftYaml = draft?.draft?.yaml || "";
+    const draftGraph = draft?.draft?.graph;
+    if (draftGraph) {
+      applyGraph(draftGraph);
+      if (draftYaml) {
+        const graphYaml = buildYamlFromNodes();
+        const graphSignature = stepsSignatureFromNodes();
+        const yamlGraph = await fetchGraphFromYaml(draftYaml);
+        if (yamlGraph) {
+          const yamlSignature = stepsSignatureFromGraph(yamlGraph);
+          if (graphSignature !== yamlSignature) {
+            await resolveGraphYamlConflict(draftYaml, graphYaml);
+            return;
+          }
+        }
+        yamlText.value = draftYaml;
+      } else {
+        syncYamlFromNodes();
+      }
+    } else if (draftYaml) {
+      yamlText.value = draftYaml;
+      const graph = await fetchGraphFromYaml(draftYaml);
+      if (graph) {
+        applyGraph(graph);
+      }
+    }
+  } catch {
+    await applyGraphFromYamlFallback();
+  }
+}
+
+async function applyGraphFromYamlFallback() {
+  const yaml = yamlText.value.trim();
+  if (!yaml) return;
+  const graph = await fetchGraphFromYaml(yaml);
+  if (graph) {
+    applyGraph(graph);
+  }
+}
+
+function applyGraph(raw: any) {
+  const graph = raw?.graph ? raw.graph : raw;
+  if (!graph || !Array.isArray(graph.nodes)) return;
+  nodes.value = graph.nodes.map((node: any, idx: number) => ({
+    id: String(node.id ?? `node-${idx}`),
+    name: node.name || `node-${idx + 1}`,
+    action: node.action || "",
+    with: node.with || {},
+    targets: node.targets || [],
+    x: Number(node.ui?.x ?? 40 + idx * 200),
+    y: Number(node.ui?.y ?? 80)
+  }));
+}
+
+function formatDuration(ms: number) {
+  if (!ms || ms <= 0) return "-";
+  if (ms < 1000) return `${ms}ms`;
+  const seconds = ms / 1000;
+  if (seconds < 60) return `${seconds.toFixed(1)}s`;
+  const minutes = Math.floor(seconds / 60);
+  const rest = Math.round(seconds - minutes * 60);
+  return `${minutes}m ${rest}s`;
+}
+
+function formatSummaryLine(summary: RunSummary) {
+  const total = summary.totalSteps || 0;
+  const success = summary.successSteps || 0;
+  const failed = summary.failedSteps || 0;
+  const duration = formatDuration(summary.durationMs);
+  return `status=${summary.status || "finished"} success=${success}/${total} failed=${failed} duration=${duration}`;
+}
+
+function formatRunEventLine(eventName: string, payload: any, eventData: Record<string, any>) {
+  const parts: string[] = [`[${eventName}]`];
+  if (payload?.step) {
+    parts.push(String(payload.step));
+  }
+  if (payload?.host) {
+    parts.push(`@${payload.host}`);
+  }
+  const status = eventData?.status ?? payload?.status;
+  if (status) {
+    parts.push(String(status));
+  }
+  const message = eventData?.message ?? payload?.message;
+  if (message) {
+    parts.push(String(message));
+  }
+  const err = eventData?.error;
+  if (err) {
+    parts.push(String(err));
+  }
+  return parts.join(" ").trim();
+}
+</script>
+
+<style scoped>
+.workbench {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 18px;
+}
+
+.workbench-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: var(--panel);
+  border-radius: var(--radius-lg);
+  padding: 14px 18px;
+  box-shadow: var(--shadow);
+  gap: 16px;
+}
+
+.bar-left h2 {
+  margin: 0;
+  font-size: 18px;
+  color: var(--ink);
+}
+
+.bar-sub {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.bar-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.bar-status {
+  margin-left: auto;
+}
+
+.status-chip {
+  font-size: 12px;
+  color: var(--muted);
+  border: 1px solid var(--grid);
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: #f6f3ef;
+}
+
+.workbench-body {
+  display: grid;
+  grid-template-columns: 320px 1fr 300px 320px;
+  gap: 16px;
+  min-height: 70vh;
+}
+
+.library-pane {
+  height: 100%;
+}
+
+.canvas {
+  position: relative;
+  background: #f1ede7;
+  border-radius: var(--radius-lg);
+  border: 1px solid #ddd6ce;
+  overflow: hidden;
+  min-height: 70vh;
+}
+
+.canvas-grid {
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(#d7d0c7 1px, transparent 1px);
+  background-size: 22px 22px;
+  opacity: 0.6;
+}
+
+.canvas-node {
+  position: absolute;
+  z-index: 2;
+  min-width: 140px;
+  padding: 10px 12px;
+  background: #ffffff;
+  border: 1px solid #e3ded7;
+  border-radius: var(--radius-md);
+  box-shadow: 0 10px 20px rgba(27, 27, 27, 0.08);
+}
+
+.node-remove {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.canvas-hint {
+  position: absolute;
+  top: 14px;
+  left: 16px;
+  font-size: 12px;
+  color: var(--muted);
+  z-index: 1;
+}
+
+.detail-pane {
+  background: var(--panel);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.chat-pane {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.run-panel {
+  background: var(--panel);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.run-head {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.run-status {
+  color: var(--ink);
+}
+
+.run-summary {
+  border: 1px solid var(--grid);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  background: #f7f4ef;
+  font-size: 11px;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.run-summary strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.summary-issues ul {
+  margin: 4px 0 0;
+  padding-left: 14px;
+}
+
+.summary-issues li {
+  line-height: 1.4;
+}
+
+.summary-label {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.summary-message {
+  color: var(--ink);
+}
+
+.run-logs {
+  max-height: 180px;
+  overflow: auto;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.log-line {
+  padding: 2px 0;
+}
+
+.detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.detail-head h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.field input,
+.field textarea {
+  border: 1px solid var(--grid);
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  font-size: 12px;
+  font-family: inherit;
+}
+
+.detail-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.node-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.node-action {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+@media (max-width: 980px) {
+  .workbench-body {
+    grid-template-columns: 1fr;
+  }
+  .canvas {
+    min-height: 60vh;
+  }
+}
+</style>

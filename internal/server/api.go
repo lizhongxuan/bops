@@ -81,6 +81,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/validation-runs", s.handleValidationRun)
 	s.mux.HandleFunc("/api/scripts", s.handleScripts)
 	s.mux.HandleFunc("/api/scripts/", s.handleScript)
+	s.mux.HandleFunc("/api/node-templates", s.handleNodeTemplates)
+	s.mux.HandleFunc("/api/node-templates/", s.handleNodeTemplate)
 	s.mux.HandleFunc("/api/ai/chat/sessions", s.handleAIChatSessions)
 	s.mux.HandleFunc("/api/ai/chat/sessions/", s.handleAIChatSession)
 	s.mux.HandleFunc("/api/ai/workflow/generate", s.handleAIWorkflowGenerate)
@@ -89,6 +91,11 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/ai/workflow/execute", s.handleAIWorkflowExecute)
 	s.mux.HandleFunc("/api/ai/workflow/summary", s.handleAIWorkflowSummary)
 	s.mux.HandleFunc("/api/ai/workflow/stream", s.handleAIWorkflowStream)
+	s.mux.HandleFunc("/api/ai/workflow/draft/", s.handleAIWorkflowDraft)
+	s.mux.HandleFunc("/api/ai/workflow/graph-from-yaml", s.handleAIWorkflowGraphFromYAML)
+	s.mux.HandleFunc("/api/ai/workflow/node-regenerate", s.handleAIWorkflowNodeRegenerate)
+	s.mux.HandleFunc("/api/ai/workflow/auto-fix-run", s.handleAIWorkflowAutoFixRun)
+	s.mux.HandleFunc("/api/runs/workflow", s.handleRunWorkflow)
 	s.mux.HandleFunc("/api/settings/ai", s.handleAISettings)
 	s.mux.HandleFunc("/api/skills", s.handleSkills)
 	s.mux.HandleFunc("/api/skills/reload", s.handleSkillsReload)
@@ -508,6 +515,8 @@ func (s *Server) handleRunStream(w http.ResponseWriter, r *http.Request, runID s
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
+	logging.L().Debug("run stream subscribe", zap.String("run_id", runID))
+
 	sub := s.bus.Subscribe(128)
 	defer sub.Cancel()
 
@@ -517,9 +526,11 @@ func (s *Server) handleRunStream(w http.ResponseWriter, r *http.Request, runID s
 	for {
 		select {
 		case <-r.Context().Done():
+			logging.L().Debug("run stream closed", zap.String("run_id", runID))
 			return
 		case evt, ok := <-sub.C:
 			if !ok {
+				logging.L().Debug("run stream closed", zap.String("run_id", runID))
 				return
 			}
 			if evt.RunID != runID {

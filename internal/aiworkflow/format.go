@@ -2,13 +2,14 @@ package aiworkflow
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 
 	"bops/internal/ai"
 	"bops/internal/workflow"
 )
 
-func buildGeneratePrompt(prompt, contextText, baseYAML string) string {
+func buildPlanPrompt(prompt, contextText, baseYAML string) string {
 	builder := strings.Builder{}
 	if contextText != "" {
 		builder.WriteString("Context:\n")
@@ -33,8 +34,35 @@ func buildGeneratePrompt(prompt, contextText, baseYAML string) string {
 	builder.WriteString("Allowed actions: ")
 	builder.WriteString(allowedActionText())
 	builder.WriteString(".\n")
+	builder.WriteString("First, produce a high-level plan with minimal steps (keep it short, target <= ")
+	builder.WriteString(fmt.Sprintf("%d", planStepLimit()))
+	builder.WriteString(").\n")
 	builder.WriteString("If information is missing, keep steps minimal and put questions in questions[].\n")
 	builder.WriteString("Do not include markdown or explanations.")
+	return builder.String()
+}
+
+func buildOptimizePrompt(planYAML string, complexSteps []ComplexStep) string {
+	builder := strings.Builder{}
+	builder.WriteString("You are optimizing a workflow plan. Return JSON only with top-level keys: workflow, questions.\n")
+	builder.WriteString("workflow must include: version, name, description, inventory, plan, steps.\n")
+	builder.WriteString("Steps must include name/action/with and must not include targets.\n")
+	builder.WriteString("Allowed actions: ")
+	builder.WriteString(allowedActionText())
+	builder.WriteString(".\n")
+	builder.WriteString("Only refine the complex steps listed below. Keep other steps unchanged.\n")
+	builder.WriteString("Do not increase total steps beyond ")
+	builder.WriteString(fmt.Sprintf("%d", maxWorkflowStepCount))
+	builder.WriteString(".\n")
+	builder.WriteString("Complex steps:\n")
+	for _, step := range complexSteps {
+		builder.WriteString("- ")
+		builder.WriteString(step.Label())
+		builder.WriteString("\n")
+	}
+	builder.WriteString("\nPlan YAML:\n")
+	builder.WriteString(strings.TrimSpace(planYAML))
+	builder.WriteString("\n\nReturn JSON only. Do not include markdown or explanations.")
 	return builder.String()
 }
 

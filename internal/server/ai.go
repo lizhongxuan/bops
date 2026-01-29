@@ -290,6 +290,12 @@ func (s *Server) handleAIWorkflowGenerate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	logging.L().Info("ai workflow generate request",
+		zap.Int("prompt_len", len(req.Prompt)),
+		zap.Int("base_yaml_len", len(req.YAML)),
+		zap.String("draft_id", strings.TrimSpace(req.DraftID)),
+	)
+
 	contextText := s.buildContextText(req.Context)
 	baseYAML := strings.TrimSpace(req.YAML)
 	if baseYAML != "" && countStepsInYAML(baseYAML) == 0 {
@@ -303,11 +309,18 @@ func (s *Server) handleAIWorkflowGenerate(w http.ResponseWriter, r *http.Request
 		BaseYAML:      baseYAML,
 	})
 	if err != nil {
+		logging.L().Error("ai workflow generate failed", zap.Error(err))
 		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
 
 	draftID := s.saveAIDraft(req.DraftID, titleFromMessage(req.Prompt), req.Prompt, state)
+	logging.L().Info("ai workflow generate done",
+		zap.String("draft_id", draftID),
+		zap.Int("yaml_len", len(state.YAML)),
+		zap.Int("issues", len(state.Issues)),
+		zap.String("risk_level", string(state.RiskLevel)),
+	)
 	writeJSON(w, http.StatusOK, aiGenerateResponse{
 		YAML:    state.YAML,
 		Message: state.Summary,
@@ -340,6 +353,12 @@ func (s *Server) handleAIWorkflowFix(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	logging.L().Info("ai workflow fix request",
+		zap.Int("yaml_len", len(req.YAML)),
+		zap.Int("issues", len(req.Issues)),
+		zap.String("draft_id", strings.TrimSpace(req.DraftID)),
+	)
+
 	baseYAML := strings.TrimSpace(req.YAML)
 	state, err := s.aiWorkflow.RunFix(r.Context(), req.YAML, req.Issues, aiworkflow.RunOptions{
 		SystemPrompt:  s.systemPrompt(""),
@@ -348,6 +367,7 @@ func (s *Server) handleAIWorkflowFix(w http.ResponseWriter, r *http.Request) {
 		BaseYAML:      baseYAML,
 	})
 	if err != nil {
+		logging.L().Error("ai workflow fix failed", zap.Error(err))
 		writeError(w, r, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -357,6 +377,12 @@ func (s *Server) handleAIWorkflowFix(w http.ResponseWriter, r *http.Request) {
 		title = "AI Fix"
 	}
 	draftID := s.saveAIDraft(req.DraftID, title, "", state)
+	logging.L().Info("ai workflow fix done",
+		zap.String("draft_id", draftID),
+		zap.Int("yaml_len", len(state.YAML)),
+		zap.Int("issues", len(state.Issues)),
+		zap.String("risk_level", string(state.RiskLevel)),
+	)
 	writeJSON(w, http.StatusOK, aiGenerateResponse{
 		YAML:    state.YAML,
 		Message: state.Summary,
@@ -385,11 +411,14 @@ func (s *Server) handleAIWorkflowValidate(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	logging.L().Debug("ai workflow validate request", zap.Int("yaml_len", len(req.YAML)))
+
 	resp := aiValidateResponse{OK: true}
 	wf, err := workflow.Load([]byte(req.YAML))
 	if err != nil {
 		resp.OK = false
 		resp.Issues = []string{err.Error()}
+		logging.L().Warn("ai workflow validate failed", zap.Error(err))
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
@@ -400,6 +429,7 @@ func (s *Server) handleAIWorkflowValidate(w http.ResponseWriter, r *http.Request
 		} else {
 			resp.Issues = []string{err.Error()}
 		}
+		logging.L().Warn("ai workflow validate issues", zap.Int("issues", len(resp.Issues)))
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -425,6 +455,8 @@ func (s *Server) handleAIWorkflowExecute(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	logging.L().Info("ai workflow execute request", zap.Int("yaml_len", len(req.YAML)), zap.String("env", strings.TrimSpace(req.Env)))
+
 	var env *validationenv.ValidationEnv
 	if strings.TrimSpace(req.Env) != "" && s.validationStore != nil {
 		if resolved, _, err := s.validationStore.Get(req.Env); err == nil {
@@ -435,6 +467,7 @@ func (s *Server) handleAIWorkflowExecute(w http.ResponseWriter, r *http.Request)
 		env = s.defaultValidationEnv()
 	}
 	if env == nil {
+		logging.L().Warn("ai workflow execute missing validation env")
 		writeError(w, r, http.StatusBadRequest, "validation env is required")
 		return
 	}
@@ -450,6 +483,11 @@ func (s *Server) handleAIWorkflowExecute(w http.ResponseWriter, r *http.Request)
 		resp.Status = "failed"
 		resp.Error = runErr.Error()
 	}
+	logging.L().Info("ai workflow execute done",
+		zap.String("status", resp.Status),
+		zap.Int("code", resp.Code),
+		zap.String("env", env.Name),
+	)
 	s.recordValidationAudit(validationAuditEntry{
 		Source:    "ai-workflow",
 		Env:       env.Name,
@@ -483,6 +521,8 @@ func (s *Server) handleAIWorkflowSummary(w http.ResponseWriter, r *http.Request)
 		writeError(w, r, http.StatusBadRequest, "yaml is required")
 		return
 	}
+
+	logging.L().Debug("ai workflow summary request", zap.Int("yaml_len", len(req.YAML)))
 
 	riskLevel, riskNotes := aiworkflow.EvaluateRisk(req.YAML, aiworkflow.DefaultRiskRules())
 	issues := []string{}

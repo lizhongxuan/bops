@@ -2,6 +2,7 @@ import { createApp } from "vue";
 import { createRouter, createWebHistory } from "vue-router";
 import App from "./App.vue";
 import HomeView from "./views/HomeView.vue";
+import WorkbenchView from "./views/WorkbenchView.vue";
 import RunsView from "./views/RunsView.vue";
 import WorkflowPickerView from "./views/WorkflowPickerView.vue";
 import WorkflowStudioView from "./views/WorkflowStudioView.vue";
@@ -21,6 +22,11 @@ const router = createRouter({
   routes: [
     {
       path: "/",
+      name: "workbench",
+      component: WorkbenchView
+    },
+    {
+      path: "/home",
       name: "home",
       component: HomeView
     },

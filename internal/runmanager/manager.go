@@ -95,10 +95,28 @@ func (m *Manager) FinishRun(runID string, runErr error) error {
 		status = "failed"
 		level = core.EventError
 	}
-	m.publish(runID, "", core.EventWorkflowEnd, level, map[string]any{
+
+	data := map[string]any{
 		"status":  status,
 		"message": errString(runErr),
-	})
+	}
+	if summary, ok := m.endSummary(runID); ok {
+		if summary.Status != "" {
+			data["status"] = summary.Status
+		}
+		data["total_steps"] = summary.TotalSteps
+		data["success_steps"] = summary.SuccessSteps
+		data["failed_steps"] = summary.FailedSteps
+		data["duration_ms"] = summary.DurationMs
+		if len(summary.Issues) > 0 {
+			data["issues"] = summary.Issues
+		}
+		if summary.Message != "" && data["message"] == "" {
+			data["message"] = summary.Message
+		}
+	}
+
+	m.publish(runID, "", core.EventWorkflowEnd, level, data)
 
 	return err
 }
@@ -129,10 +147,27 @@ func (m *Manager) StopRun(runID string) error {
 		run.Message = "stopped by user"
 	})
 
-	m.publish(runID, "", core.EventWorkflowEnd, core.EventWarn, map[string]any{
+	data := map[string]any{
 		"status":  "stopped",
 		"message": "stopped by user",
-	})
+	}
+	if summary, ok := m.endSummary(runID); ok {
+		if summary.Status != "" {
+			data["status"] = summary.Status
+		}
+		data["total_steps"] = summary.TotalSteps
+		data["success_steps"] = summary.SuccessSteps
+		data["failed_steps"] = summary.FailedSteps
+		data["duration_ms"] = summary.DurationMs
+		if len(summary.Issues) > 0 {
+			data["issues"] = summary.Issues
+		}
+		if summary.Message != "" && data["message"] == "" {
+			data["message"] = summary.Message
+		}
+	}
+
+	m.publish(runID, "", core.EventWorkflowEnd, core.EventWarn, data)
 
 	return err
 }
@@ -201,6 +236,14 @@ func (m *Manager) updateRun(runID string, apply func(*state.RunState)) error {
 	}
 
 	return fmt.Errorf("run %s not found", runID)
+}
+
+func (m *Manager) endSummary(runID string) (EndSummary, bool) {
+	run, ok, err := m.GetRun(runID)
+	if err != nil || !ok {
+		return EndSummary{}, false
+	}
+	return BuildEndSummary(run), true
 }
 
 func (m *Manager) publish(runID, workflowName string, eventType core.EventType, level core.EventLevel, data map[string]any) {

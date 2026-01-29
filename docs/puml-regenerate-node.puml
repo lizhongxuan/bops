@@ -1,0 +1,14 @@
+@startuml
+actor 用户 as User
+participant "工作台 UI" as UI
+participant "AI 工作流 API" as API
+participant "AI 模型" as LLM
+
+User -> UI: 选择节点并点击重生成
+UI -> API: POST /api/ai/workflow/node-regenerate
+API -> LLM: 节点上下文 + 邻居 + 意图
+LLM --> API: 更新节点 + YAML
+API --> UI: 更新节点 + YAML + graph
+UI -> UI: 更新节点与连线\n同步 YAML
+UI --> User: 画布更新
+@enduml

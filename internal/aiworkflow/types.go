@@ -51,6 +51,8 @@ type State struct {
 	IsSuccess        bool
 	LastError        string
 	Summary          string
+	GenerationNotice string
+	AutoFixDiffs     []string
 	NeedsReview      bool
 	History          []string
 	EventSink        EventSink

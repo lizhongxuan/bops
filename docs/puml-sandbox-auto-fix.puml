@@ -1,0 +1,21 @@
+@startuml
+actor 用户 as User
+participant "工作台 UI" as UI
+participant "AI 工作流 API" as API
+participant "校验器" as Validator
+participant "AI 模型" as LLM
+
+User -> UI: 点击校验 (自动修复)
+UI -> API: POST /api/ai/workflow/auto-fix-run
+loop 直到成功或达到上限
+  API -> Validator: YAML 规则校验
+  Validator --> API: 日志 + 状态
+  alt 校验失败
+    API -> LLM: 发送错误 + YAML 修复
+    LLM --> API: 修复后的 YAML
+  end
+end
+API --> UI: 流式事件 + 最终 YAML
+UI -> UI: 更新图与节点状态
+UI --> User: 展示成功或剩余错误
+@enduml

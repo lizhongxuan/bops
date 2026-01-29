@@ -1,0 +1,13 @@
+@startuml
+actor 用户 as User
+participant "节点库" as Library
+participant "工作台 UI" as UI
+participant "草稿存储" as Store
+
+User -> Library: 拖拽模板节点
+Library -> UI: 在画布上释放
+UI -> UI: 新建节点并定位\n更新图状态
+UI -> UI: 重新计算连线/顺序
+UI -> Store: 自动保存草稿 (graph + YAML)
+Store --> UI: 保存成功
+@enduml

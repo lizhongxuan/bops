@@ -1,0 +1,14 @@
+@startuml
+actor 用户 as User
+participant "工作台 UI" as UI
+participant "AI 工作流 API" as API
+participant "AI 模型" as LLM
+
+User -> UI: 输入需求并点击生成
+UI -> API: POST /api/ai/workflow/generate
+API -> LLM: 构建提示并调用
+LLM --> API: 返回 YAML/问题/摘要
+API --> UI: 返回 YAML + draft_id
+UI -> UI: 基于 YAML 生成图并自动布局
+UI --> User: 渲染画布与摘要
+@enduml
