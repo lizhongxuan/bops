@@ -813,7 +813,7 @@ function formatRunEventLine(eventName: string, payload: any, eventData: Record<s
   display: flex;
   flex-direction: column;
   gap: 16px;
-  padding: 16px;
+  padding: 0;
   position: relative;
   flex: 1;
   min-height: 0;

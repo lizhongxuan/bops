@@ -360,6 +360,8 @@ const showSwitch = computed(() => hasWorkflow.value);
 
 .topbar-workbench {
   justify-content: flex-end;
+  min-height: 48px;
+  padding: 6px 16px;
 }
 
 .topbar-workbench .title-spacer {
