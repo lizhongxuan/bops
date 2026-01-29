@@ -1,11 +1,9 @@
 package nodetemplate
 
 type NodeSpec struct {
-	Type    string         `json:"type" yaml:"type"`
-	Name    string         `json:"name" yaml:"name"`
-	Action  string         `json:"action" yaml:"action"`
-	With    map[string]any `json:"with,omitempty" yaml:"with,omitempty"`
-	Targets []string       `json:"targets,omitempty" yaml:"targets,omitempty"`
+	Type string         `json:"type" yaml:"type"`
+	Name string         `json:"name" yaml:"name"`
+	Data map[string]any `json:"data,omitempty" yaml:"data,omitempty"`
 }
 
 type Template struct {
@@ -21,6 +19,5 @@ type Summary struct {
 	Category    string   `json:"category"`
 	Description string   `json:"description"`
 	Tags        []string `json:"tags,omitempty"`
-	Action      string   `json:"action,omitempty"`
 	Node        NodeSpec `json:"node,omitempty"`
 }

@@ -38,7 +38,7 @@ func (s *Server) handleNodeTemplates(w http.ResponseWriter, r *http.Request) {
 			if strings.Contains(strings.ToLower(item.Name), search) ||
 				strings.Contains(strings.ToLower(item.Description), search) ||
 				strings.Contains(strings.ToLower(item.Category), search) ||
-				strings.Contains(strings.ToLower(item.Action), search) ||
+				strings.Contains(strings.ToLower(item.Node.Type), search) ||
 				strings.Contains(strings.ToLower(strings.Join(item.Tags, " ")), search) {
 				filtered = append(filtered, item)
 			}

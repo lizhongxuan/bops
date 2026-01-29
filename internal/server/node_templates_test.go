@@ -31,7 +31,7 @@ func newNodeTemplateTestServer(t *testing.T) *Server {
 
 func TestNodeTemplatesAPI(t *testing.T) {
 	srv := newNodeTemplateTestServer(t)
-	payload := bytes.NewBufferString(`{"name":"pkg_install","category":"actions","description":"install pkg","tags":["pkg"],"node":{"type":"action","name":"install pkg","action":"pkg.install","with":{"name":"nginx"}}}`)
+	payload := bytes.NewBufferString(`{"name":"pkg_install","category":"actions","description":"install pkg","tags":["pkg"],"node":{"type":"action","name":"install pkg","data":{"action":"pkg.install","with":{"name":"nginx"}}}}`)
 	putReq := httptest.NewRequest(http.MethodPut, "/api/node-templates/pkg_install", payload)
 	putRec := httptest.NewRecorder()
 	srv.mux.ServeHTTP(putRec, putReq)

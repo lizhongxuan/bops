@@ -22,16 +22,45 @@
         @drop="handleDrop"
       >
         <div class="canvas-grid"></div>
-        <div class="canvas-hint">拖拽左侧模板到画布</div>
+        <svg class="edge-layer">
+          <path
+            v-for="edge in edgePaths"
+            :key="edge.id"
+            class="edge-path"
+            :d="edge.path"
+            @click.stop="removeEdge(edge.id)"
+          />
+          <path v-if="linkingPath" class="edge-path preview" :d="linkingPath" />
+        </svg>
+        <div class="canvas-hint">
+          <span>拖拽左侧模板到画布</span>
+          <span>选择节点后，按住 Shift 点击另一个节点建立连接</span>
+        </div>
         <div
           v-for="node in nodes"
           :key="node.id"
           class="canvas-node"
+          :class="{ dragging: dragging?.id === node.id }"
           :style="{ left: `${node.x}px`, top: `${node.y}px` }"
-          @click="selectNode(node)"
+          @click="selectNode(node, $event)"
+          @mousedown="startDrag(node, $event)"
         >
+          <div class="node-handles">
+            <button
+              class="node-handle handle-in"
+              type="button"
+              @mouseenter="setLinkTarget(node.id)"
+              @mouseleave="clearLinkTarget(node.id)"
+              @mouseup.stop="finishLink(node.id)"
+            ></button>
+            <button
+              class="node-handle handle-out"
+              type="button"
+              @mousedown.stop="startLink(node, $event)"
+            ></button>
+          </div>
           <div class="node-title">{{ node.name }}</div>
-          <div class="node-action">{{ node.action }}</div>
+          <div class="node-action">{{ (node.data && node.data["action"]) || node.type }}</div>
           <button class="node-remove" type="button" @click.stop="removeNode(node.id)">×</button>
         </div>
       </main>
@@ -47,16 +76,12 @@
             <input v-model="selectedNode.name" type="text" />
           </label>
           <label class="field">
-            <span>Action</span>
-            <input v-model="selectedNode.action" type="text" />
+            <span>类型</span>
+            <input v-model="selectedNode.type" type="text" disabled />
           </label>
           <label class="field">
-            <span>Targets</span>
-            <input v-model="targetsInput" type="text" placeholder="web, db" />
-          </label>
-          <label class="field">
-            <span>With JSON</span>
-            <textarea v-model="withInput" rows="4" placeholder='{ "name": "nginx" }'></textarea>
+            <span>配置 JSON</span>
+            <textarea v-model="dataInput" rows="6" placeholder='{ "prompt": "Hello {{#start.query#}}" }'></textarea>
           </label>
           <div class="detail-actions">
             <button class="btn btn-sm" type="button" @click="applyDetail">应用</button>
@@ -81,7 +106,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import NodeLibraryPanel, { type TemplateSummary } from "../components/NodeLibraryPanel.vue";
 import ChatDrawer from "../components/ChatDrawer.vue";
 import { apiBase, request } from "../lib/api";
@@ -100,18 +125,28 @@ const canvasRef = ref<HTMLElement | null>(null);
 const nodes = ref<
   Array<{
     id: string;
+    type: string;
     name: string;
-    action: string;
-    with?: Record<string, unknown>;
-    targets?: string[];
+    data?: Record<string, unknown>;
     x: number;
     y: number;
   }>
 >([]);
+const edges = ref<Array<{ id: string; source: string; target: string }>>([]);
+const linking = ref<{
+  sourceId: string;
+  start: { x: number; y: number };
+  current: { x: number; y: number };
+} | null>(null);
+const dragging = ref<{
+  id: string;
+  offsetX: number;
+  offsetY: number;
+} | null>(null);
+const linkTargetId = ref<string | null>(null);
 let nodeIndex = 0;
 const selectedNodeId = ref<string | null>(null);
-const withInput = ref("");
-const targetsInput = ref("");
+const dataInput = ref("");
 const chatStatus = ref("");
 const chatError = ref("");
 const chatBusy = ref(false);
@@ -149,25 +184,33 @@ function handleDrop(event: DragEvent) {
 
   const id = `node-${Date.now()}-${nodeIndex++}`;
   const nodeSpec = template.node || {};
-  nodes.value.push({
+  const newNode = {
     id,
+    type: nodeSpec.type || "custom",
     name: nodeSpec.name || template.name || "未命名节点",
-    action: nodeSpec.action || template.action || "",
-    with: nodeSpec.with || {},
-    targets: nodeSpec.targets || [],
+    data: nodeSpec.data ? { ...nodeSpec.data } : {},
     x: Math.max(20, x - 60),
     y: Math.max(20, y - 20)
-  });
+  };
+  const previous = nodes.value.length ? nodes.value[nodes.value.length - 1] : null;
+  nodes.value.push(newNode);
+  if (previous) {
+    addEdge(previous.id, newNode.id);
+  }
   syncYamlFromNodes();
   scheduleDraftSave("drop");
 }
 
-function selectNode(node: { id: string }) {
+function selectNode(node: { id: string }, event?: MouseEvent) {
+  if (event?.shiftKey && selectedNodeId.value && selectedNodeId.value !== node.id) {
+    addEdge(selectedNodeId.value, node.id);
+  }
   selectedNodeId.value = node.id;
 }
 
 function removeNode(id: string) {
   nodes.value = nodes.value.filter((node) => node.id !== id);
+  edges.value = edges.value.filter((edge) => edge.source !== id && edge.target !== id);
   if (selectedNodeId.value === id) {
     selectedNodeId.value = null;
   }
@@ -175,32 +218,172 @@ function removeNode(id: string) {
   scheduleDraftSave("remove");
 }
 
+function addEdge(source: string, target: string) {
+  if (source === target) return;
+  const exists = edges.value.some((edge) => edge.source === source && edge.target === target);
+  if (exists) return;
+  edges.value.push({
+    id: `edge-${Date.now()}-${Math.floor(Math.random() * 10000)}`,
+    source,
+    target
+  });
+  scheduleDraftSave("edge");
+}
+
+function removeEdge(id: string) {
+  edges.value = edges.value.filter((edge) => edge.id !== id);
+  scheduleDraftSave("edge-remove");
+}
+
+function startLink(node: { id: string }, event: MouseEvent) {
+  if (!canvasRef.value) return;
+  const handleRect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  const canvasRect = canvasRef.value.getBoundingClientRect();
+  const start = {
+    x: handleRect.left + handleRect.width / 2 - canvasRect.left,
+    y: handleRect.top + handleRect.height / 2 - canvasRect.top
+  };
+  linking.value = {
+    sourceId: node.id,
+    start,
+    current: start
+  };
+  linkTargetId.value = null;
+}
+
+function finishLink(targetId: string) {
+  if (!linking.value) return;
+  if (linking.value.sourceId !== targetId) {
+    addEdge(linking.value.sourceId, targetId);
+  }
+  linking.value = null;
+  linkTargetId.value = null;
+}
+
+function setLinkTarget(id: string) {
+  if (!linking.value) return;
+  linkTargetId.value = id;
+}
+
+function clearLinkTarget(id: string) {
+  if (linkTargetId.value === id) {
+    linkTargetId.value = null;
+  }
+}
+
+function updateLinkingPosition(event: MouseEvent) {
+  if (!linking.value || !canvasRef.value) return;
+  const canvasRect = canvasRef.value.getBoundingClientRect();
+  linking.value.current = {
+    x: event.clientX - canvasRect.left,
+    y: event.clientY - canvasRect.top
+  };
+}
+
+function startDrag(node: { id: string }, event: MouseEvent) {
+  if (!canvasRef.value) return;
+  if (event.button !== 0) return;
+  const target = event.target as HTMLElement | null;
+  if (target?.closest(".node-handle") || target?.closest(".node-remove")) {
+    return;
+  }
+  const canvasRect = canvasRef.value.getBoundingClientRect();
+  const offsetX = event.clientX - canvasRect.left - node.x;
+  const offsetY = event.clientY - canvasRect.top - node.y;
+  dragging.value = { id: node.id, offsetX, offsetY };
+}
+
+function updateDraggingPosition(event: MouseEvent) {
+  if (!dragging.value || !canvasRef.value) return;
+  const canvasRect = canvasRef.value.getBoundingClientRect();
+  const nextX = event.clientX - canvasRect.left - dragging.value.offsetX;
+  const nextY = event.clientY - canvasRect.top - dragging.value.offsetY;
+  const node = nodes.value.find((item) => item.id === dragging.value?.id);
+  if (!node) return;
+  node.x = Math.max(12, nextX);
+  node.y = Math.max(12, nextY);
+}
+
+function stopDragging() {
+  if (!dragging.value) return;
+  dragging.value = null;
+  scheduleDraftSave("move");
+}
+
+function stopLinking() {
+  if (!linking.value) return;
+  if (linkTargetId.value) {
+    addEdge(linking.value.sourceId, linkTargetId.value);
+  }
+  linking.value = null;
+  linkTargetId.value = null;
+}
+
+const edgePaths = computed(() => {
+  const map = new Map(nodes.value.map((node) => [node.id, node]));
+  return edges.value
+    .map((edge) => {
+      const source = map.get(edge.source);
+      const target = map.get(edge.target);
+      if (!source || !target) return null;
+      const sx = source.x + 90;
+      const sy = source.y + 45;
+      const tx = target.x + 90;
+      const ty = target.y + 45;
+      const dx = Math.max(40, Math.abs(tx - sx) * 0.5);
+      const path = `M ${sx} ${sy} C ${sx + dx} ${sy}, ${tx - dx} ${ty}, ${tx} ${ty}`;
+      return { id: edge.id, path };
+    })
+    .filter(Boolean) as Array<{ id: string; path: string }>;
+});
+
+const linkingPath = computed(() => {
+  if (!linking.value) return "";
+  const { start, current } = linking.value;
+  const dx = Math.max(40, Math.abs(current.x - start.x) * 0.5);
+  return `M ${start.x} ${start.y} C ${start.x + dx} ${start.y}, ${current.x - dx} ${current.y}, ${current.x} ${current.y}`;
+});
+
+function onWindowMouseMove(event: MouseEvent) {
+  updateLinkingPosition(event);
+  updateDraggingPosition(event);
+}
+
+function onWindowMouseUp() {
+  stopLinking();
+  stopDragging();
+}
+
+onMounted(() => {
+  window.addEventListener("mousemove", onWindowMouseMove);
+  window.addEventListener("mouseup", onWindowMouseUp);
+});
+
+onBeforeUnmount(() => {
+  window.removeEventListener("mousemove", onWindowMouseMove);
+  window.removeEventListener("mouseup", onWindowMouseUp);
+});
+
 function applyDetail() {
   if (!selectedNode.value) return;
   try {
-    const parsed = withInput.value.trim() ? JSON.parse(withInput.value) : {};
-    selectedNode.value.with = parsed;
+    const parsed = dataInput.value.trim() ? JSON.parse(dataInput.value) : {};
+    selectedNode.value.data = parsed;
   } catch {
     // ignore invalid json
   }
-  selectedNode.value.targets = targetsInput.value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
   syncYamlFromNodes();
   scheduleDraftSave("detail");
 }
 
 function resetDetail() {
   if (!selectedNode.value) return;
-  withInput.value = JSON.stringify(selectedNode.value.with || {}, null, 2);
-  targetsInput.value = (selectedNode.value.targets || []).join(", ");
+  dataInput.value = JSON.stringify(selectedNode.value.data || {}, null, 2);
 }
 
 watch(selectedNode, (node) => {
   if (!node) return;
-  withInput.value = JSON.stringify(node.with || {}, null, 2);
-  targetsInput.value = (node.targets || []).join(", ");
+  dataInput.value = JSON.stringify(node.data || {}, null, 2);
 });
 
 function autoLayout() {
@@ -229,16 +412,29 @@ function autoLayout() {
 
 function buildYamlFromNodes() {
   if (!nodes.value.length) return "";
+  const actionNodes = nodes.value.filter((node) => node.type === "action");
+  if (!actionNodes.length) return "";
   const lines: string[] = ["version: v0.1", "name: draft-workbench", "steps:"];
-  nodes.value.forEach((node) => {
+  actionNodes.forEach((node) => {
+    const data = node.data || {};
+    const actionRaw = data["action"];
+    const targetsRaw = data["targets"];
+    const withRaw = data["with"];
+    const action = typeof actionRaw === "string" ? actionRaw : "";
+    const targets = Array.isArray(targetsRaw)
+      ? targetsRaw.map((item) => String(item))
+      : [];
+    const withValue =
+      withRaw && typeof withRaw === "object" && !Array.isArray(withRaw)
+        ? (withRaw as Record<string, unknown>)
+        : null;
     lines.push(`  - name: ${yamlScalar(node.name)}`);
-    if (node.action) {
-      lines.push(`    action: ${yamlScalar(node.action)}`);
+    if (action) {
+      lines.push(`    action: ${yamlScalar(action)}`);
     }
-    if (node.targets && node.targets.length) {
-      lines.push(`    targets: ${JSON.stringify(node.targets)}`);
+    if (targets.length) {
+      lines.push(`    targets: ${JSON.stringify(targets)}`);
     }
-    const withValue = node.with && Object.keys(node.with).length ? node.with : null;
     if (withValue) {
       lines.push(`    with: ${JSON.stringify(withValue)}`);
     }
@@ -282,44 +478,53 @@ function stableStringify(value: unknown): string {
 function stepsSignatureFromNodes() {
   const steps = nodes.value.map((node) => ({
     name: node.name || "",
-    action: node.action || "",
-    targets: node.targets || [],
-    with: stableStringify(node.with || {})
+    type: node.type || "",
+    data: stableStringify(node.data || {})
   }));
-  return JSON.stringify(steps);
+  const links = edges.value.map((edge) => ({
+    source: edge.source,
+    target: edge.target
+  }));
+  return JSON.stringify({ steps, links });
 }
 
 function stepsSignatureFromGraph(graph: any) {
   const graphNodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+  const graphEdges = Array.isArray(graph?.edges) ? graph.edges : [];
   const steps = graphNodes.map((node: any) => ({
     name: String(node?.name || ""),
-    action: String(node?.action || ""),
-    targets: Array.isArray(node?.targets) ? node.targets : [],
-    with: stableStringify(node?.with || {})
+    type: String(node?.type || ""),
+    data: stableStringify(
+      node?.data ??
+        (node?.action || node?.with || node?.targets
+          ? { action: node.action, with: node.with, targets: node.targets }
+          : {})
+    )
   }));
-  return JSON.stringify(steps);
+  const links = graphEdges.map((edge: any) => ({
+    source: String(edge?.source || ""),
+    target: String(edge?.target || "")
+  }));
+  return JSON.stringify({ steps, links });
 }
 
 function buildGraphFromNodes() {
   const graphNodes = nodes.value.map((node, idx) => ({
     id: node.id,
-    type: "action",
+    type: node.type || "custom",
     name: node.name || `node-${idx + 1}`,
-    action: node.action || "",
-    with: node.with || {},
-    targets: node.targets || [],
+    data: node.data || {},
     ui: { x: node.x, y: node.y }
   }));
-  const edges = graphNodes.slice(1).map((node, idx) => ({
-    id: `edge-${idx + 1}`,
-    source: graphNodes[idx].id,
-    target: node.id
-  }));
+  const validIds = new Set(graphNodes.map((node) => node.id));
+  const graphEdges = edges.value.filter(
+    (edge) => validIds.has(edge.source) && validIds.has(edge.target)
+  );
   return {
     version: "v1",
     layout: { direction: "LR" },
     nodes: graphNodes,
-    edges
+    edges: graphEdges
   };
 }
 
@@ -345,9 +550,9 @@ function scheduleDraftSave(reason?: string) {
 
 async function saveDraft(_reason?: string) {
   const yaml = yamlText.value || buildYamlFromNodes();
-  if (!yaml.trim()) return;
   const graph = buildGraphFromNodes();
   const graphText = JSON.stringify(graph);
+  if (!yaml.trim() && (!graph.nodes || graph.nodes.length === 0)) return;
   if (
     normalizeYamlText(yaml) === normalizeYamlText(lastSavedYaml) &&
     graphText === lastSavedGraph
@@ -477,6 +682,10 @@ async function handleRegenerate(prompt: string) {
     chatError.value = "请先选择节点。";
     return;
   }
+  if (selectedNode.value.type !== "action") {
+    chatError.value = "该节点类型暂不支持重生成。";
+    return;
+  }
   const yaml = yamlText.value || buildYamlFromNodes();
   if (!yaml.trim()) {
     chatError.value = "当前没有可重生成的流程。";
@@ -488,6 +697,10 @@ async function handleRegenerate(prompt: string) {
     const index = nodes.value.findIndex((node) => node.id === selectedNode.value?.id);
     const prev = index > 0 ? [nodes.value[index - 1]] : [];
     const next = index >= 0 && index < nodes.value.length - 1 ? [nodes.value[index + 1]] : [];
+    const nodeData = selectedNode.value.data || {};
+    const actionRaw = nodeData["action"];
+    const withRaw = nodeData["with"];
+    const targetsRaw = nodeData["targets"];
     const resp = await request<{ yaml: string; graph?: any; message?: string }>(
       "/ai/workflow/node-regenerate",
       {
@@ -497,13 +710,19 @@ async function handleRegenerate(prompt: string) {
             id: selectedNode.value.id,
             index,
             name: selectedNode.value.name,
-            action: selectedNode.value.action,
-            with: selectedNode.value.with || {},
-            targets: selectedNode.value.targets || []
+            action: String(actionRaw || ""),
+            with: (withRaw as Record<string, unknown>) || {},
+            targets: Array.isArray(targetsRaw) ? targetsRaw : []
           },
           neighbors: {
-            prev: prev.map((item) => ({ name: item.name, action: item.action })),
-            next: next.map((item) => ({ name: item.name, action: item.action }))
+            prev: prev.map((item) => ({
+              name: item.name,
+              action: String(item.data ? item.data["action"] : "")
+            })),
+            next: next.map((item) => ({
+              name: item.name,
+              action: String(item.data ? item.data["action"] : "")
+            }))
           },
           workflow: { yaml },
           intent: prompt
@@ -611,8 +830,8 @@ async function handleAutoFix() {
 async function handleRun() {
   chatError.value = "";
   chatStatus.value = "";
-  const yaml = yamlText.value || buildYamlFromNodes();
-  if (!yaml.trim()) {
+  const graph = buildGraphFromNodes();
+  if (!graph.nodes.length) {
     chatError.value = "当前没有可运行的流程。";
     return;
   }
@@ -621,9 +840,9 @@ async function handleRun() {
   runSummary.value = null;
   runStatus.value = "running";
   try {
-    const resp = await request<{ run_id: string; status: string }>("/runs/workflow", {
+    const resp = await request<{ run_id: string; status: string }>("/runs/graph", {
       method: "POST",
-      body: { yaml }
+      body: { graph, inputs: {} }
     });
     runId.value = resp.run_id;
     runStatus.value = resp.status;
@@ -757,13 +976,29 @@ function applyGraph(raw: any) {
   if (!graph || !Array.isArray(graph.nodes)) return;
   nodes.value = graph.nodes.map((node: any, idx: number) => ({
     id: String(node.id ?? `node-${idx}`),
+    type: String(
+      node.type || (node.action || node.with || node.targets ? "action" : "custom")
+    ),
     name: node.name || `node-${idx + 1}`,
-    action: node.action || "",
-    with: node.with || {},
-    targets: node.targets || [],
+    data:
+      node.data ??
+      (node.action || node.with || node.targets
+        ? {
+            action: node.action || "",
+            with: node.with || {},
+            targets: node.targets || []
+          }
+        : {}),
     x: Number(node.ui?.x ?? 40 + idx * 200),
     y: Number(node.ui?.y ?? 80)
   }));
+  edges.value = Array.isArray(graph.edges)
+    ? graph.edges.map((edge: any, idx: number) => ({
+        id: String(edge.id ?? `edge-${idx}`),
+        source: String(edge.source || ""),
+        target: String(edge.target || "")
+      }))
+    : [];
 }
 
 function formatDuration(ms: number) {
@@ -896,6 +1131,31 @@ function formatRunEventLine(eventName: string, payload: any, eventData: Record<s
   height: 100%;
 }
 
+.edge-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.edge-path {
+  fill: none;
+  stroke: rgba(90, 90, 90, 0.5);
+  stroke-width: 2;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+.edge-path:hover {
+  stroke: rgba(232, 93, 42, 0.7);
+}
+
+.edge-path.preview {
+  stroke-dasharray: 4 6;
+  stroke: rgba(232, 93, 42, 0.5);
+  pointer-events: none;
+}
+
 .canvas-grid {
   position: absolute;
   inset: 0;
@@ -913,6 +1173,41 @@ function formatRunEventLine(eventName: string, payload: any, eventData: Record<s
   border: 1px solid #e3ded7;
   border-radius: var(--radius-md);
   box-shadow: 0 10px 20px rgba(27, 27, 27, 0.08);
+  cursor: grab;
+}
+
+.canvas-node.dragging {
+  cursor: grabbing;
+}
+
+.node-handles {
+  position: absolute;
+  top: 50%;
+  left: 0;
+  right: 0;
+  display: flex;
+  justify-content: space-between;
+  transform: translateY(-50%);
+  pointer-events: auto;
+  z-index: 3;
+}
+
+.node-handle {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid #e3ded7;
+  background: #fff;
+  pointer-events: auto;
+  cursor: crosshair;
+}
+
+.node-handle.handle-in {
+  margin-left: -8px;
+}
+
+.node-handle.handle-out {
+  margin-right: -8px;
 }
 
 .node-remove {
@@ -932,6 +1227,9 @@ function formatRunEventLine(eventName: string, payload: any, eventData: Record<s
   font-size: 12px;
   color: var(--muted);
   z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
 }
 
 .detail-pane {

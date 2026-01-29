@@ -21,14 +21,12 @@ type GraphLayout struct {
 }
 
 type Node struct {
-	ID      string         `json:"id"`
-	Type    string         `json:"type"`
-	Name    string         `json:"name"`
-	Action  string         `json:"action,omitempty"`
-	With    map[string]any `json:"with,omitempty"`
-	Targets []string       `json:"targets,omitempty"`
-	Meta    map[string]any `json:"meta,omitempty"`
-	UI      NodeUI         `json:"ui,omitempty"`
+	ID   string         `json:"id"`
+	Type string         `json:"type"`
+	Name string         `json:"name"`
+	Data map[string]any `json:"data,omitempty"`
+	Meta map[string]any `json:"meta,omitempty"`
+	UI   NodeUI         `json:"ui,omitempty"`
 }
 
 type NodeUI struct {
@@ -55,9 +53,11 @@ func GraphFromWorkflow(wf workflow.Workflow) Graph {
 			ID:      id,
 			Type:    "action",
 			Name:    name,
-			Action:  strings.TrimSpace(step.Action),
-			With:    step.With,
-			Targets: append([]string{}, step.Targets...),
+			Data: map[string]any{
+				"action":  strings.TrimSpace(step.Action),
+				"with":    step.With,
+				"targets": append([]string{}, step.Targets...),
+			},
 			UI: NodeUI{
 				X: float64(240 * i),
 				Y: 80,
@@ -106,11 +106,37 @@ func WorkflowFromGraph(graph Graph, base workflow.Workflow) workflow.Workflow {
 		if !ok {
 			continue
 		}
+		if strings.TrimSpace(node.Type) != "action" {
+			continue
+		}
+		action := ""
+		var with map[string]any
+		var targets []string
+		if node.Data != nil {
+			if raw, ok := node.Data["action"]; ok {
+				action = strings.TrimSpace(fmt.Sprint(raw))
+			}
+			if raw, ok := node.Data["with"]; ok {
+				if mapped, ok := raw.(map[string]any); ok {
+					with = mapped
+				}
+			}
+			if raw, ok := node.Data["targets"]; ok {
+				switch v := raw.(type) {
+				case []string:
+					targets = append([]string{}, v...)
+				case []any:
+					for _, item := range v {
+						targets = append(targets, fmt.Sprint(item))
+					}
+				}
+			}
+		}
 		step := workflow.Step{
 			Name:    node.Name,
-			Action:  node.Action,
-			With:    node.With,
-			Targets: append([]string{}, node.Targets...),
+			Action:  action,
+			With:    with,
+			Targets: targets,
 		}
 		steps = append(steps, step)
 	}

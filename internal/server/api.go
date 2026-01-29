@@ -96,6 +96,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/ai/workflow/node-regenerate", s.handleAIWorkflowNodeRegenerate)
 	s.mux.HandleFunc("/api/ai/workflow/auto-fix-run", s.handleAIWorkflowAutoFixRun)
 	s.mux.HandleFunc("/api/runs/workflow", s.handleRunWorkflow)
+	s.mux.HandleFunc("/api/runs/graph", s.handleRunGraph)
 	s.mux.HandleFunc("/api/settings/ai", s.handleAISettings)
 	s.mux.HandleFunc("/api/skills", s.handleSkills)
 	s.mux.HandleFunc("/api/skills/reload", s.handleSkillsReload)

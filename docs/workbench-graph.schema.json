@@ -31,12 +31,7 @@
               "id": { "type": "string", "minLength": 1 },
               "type": { "type": "string", "minLength": 1 },
               "name": { "type": "string", "minLength": 1 },
-              "action": { "type": "string" },
-              "with": { "type": "object" },
-              "targets": {
-                "type": "array",
-                "items": { "type": "string" }
-              },
+              "data": { "type": "object" },
               "meta": {
                 "type": "object",
                 "properties": {

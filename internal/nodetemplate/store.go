@@ -43,20 +43,19 @@ func (s *Store) List() ([]Summary, error) {
 			return nil, err
 		}
 		var tpl Template
-		if err := yaml.Unmarshal(data, &tpl); err != nil {
-			return nil, err
-		}
-		if tpl.Name == "" {
-			tpl.Name = name
-		}
-		items = append(items, Summary{
-			Name:        tpl.Name,
-			Category:    tpl.Category,
-			Description: tpl.Description,
-			Tags:        append([]string{}, tpl.Tags...),
-			Action:      strings.TrimSpace(tpl.Node.Action),
-			Node:        tpl.Node,
-		})
+	if err := yaml.Unmarshal(data, &tpl); err != nil {
+		return nil, err
+	}
+	if tpl.Name == "" {
+		tpl.Name = name
+	}
+	items = append(items, Summary{
+		Name:        tpl.Name,
+		Category:    tpl.Category,
+		Description: tpl.Description,
+		Tags:        append([]string{}, tpl.Tags...),
+		Node:        tpl.Node,
+	})
 	}
 
 	sort.Slice(items, func(i, j int) bool {
@@ -108,8 +107,8 @@ func (s *Store) Put(name string, tpl Template) (Template, error) {
 	if strings.TrimSpace(tpl.Category) == "" {
 		return Template{}, fmt.Errorf("template category is required")
 	}
-	if strings.TrimSpace(tpl.Node.Action) == "" {
-		return Template{}, fmt.Errorf("template node action is required")
+	if strings.TrimSpace(tpl.Node.Type) == "" {
+		return Template{}, fmt.Errorf("template node type is required")
 	}
 	if strings.TrimSpace(tpl.Node.Name) == "" {
 		tpl.Node.Name = tpl.Name

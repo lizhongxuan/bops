@@ -27,7 +27,9 @@
               @dragstart="(event) => onDragStart(event, item)"
             >
               <div class="template-name">{{ item.name }}</div>
-              <div class="template-desc">{{ item.description || item.action || "" }}</div>
+              <div class="template-desc">
+                {{ item.description || (item.node?.type ? `类型: ${item.node?.type}` : "") }}
+              </div>
               <div class="template-tags" v-if="item.tags && item.tags.length">
                 <span v-for="tag in item.tags" :key="tag" class="tag">{{ tag }}</span>
               </div>
@@ -49,13 +51,10 @@ export type TemplateSummary = {
   category: string;
   description: string;
   tags?: string[];
-  action?: string;
   node?: {
     type?: string;
     name?: string;
-    action?: string;
-    with?: Record<string, unknown>;
-    targets?: string[];
+    data?: Record<string, unknown>;
   };
 };
 
@@ -77,7 +76,7 @@ const filteredTemplates = computed(() => {
       item.name,
       item.category,
       item.description,
-      item.action,
+      item.node?.type,
       ...(item.tags || [])
     ]
       .filter(Boolean)

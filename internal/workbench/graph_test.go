@@ -56,8 +56,22 @@ steps:
 	graph := Graph{
 		Version: "v1",
 		Nodes: []Node{
-			{ID: "node-b", Name: "second", Action: "cmd.run"},
-			{ID: "node-a", Name: "first", Action: "cmd.run"},
+			{
+				ID:   "node-b",
+				Name: "second",
+				Type: "action",
+				Data: map[string]any{
+					"action": "cmd.run",
+				},
+			},
+			{
+				ID:   "node-a",
+				Name: "first",
+				Type: "action",
+				Data: map[string]any{
+					"action": "cmd.run",
+				},
+			},
 		},
 		Edges: []Edge{
 			{ID: "edge-1", Source: "node-b", Target: "node-a"},

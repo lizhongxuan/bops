@@ -17,9 +17,11 @@ func TestStorePutGetList(t *testing.T) {
 		Node: NodeSpec{
 			Type:   "action",
 			Name:   "install",
-			Action: "pkg.install",
-			With: map[string]any{
-				"name": "nginx",
+			Data: map[string]any{
+				"action": "pkg.install",
+				"with": map[string]any{
+					"name": "nginx",
+				},
 			},
 		},
 	})
@@ -40,8 +42,9 @@ func TestStorePutGetList(t *testing.T) {
 	if len(list) != 1 {
 		t.Fatalf("expected 1 item, got %d", len(list))
 	}
-	if list[0].Node.Action != "pkg.install" {
-		t.Fatalf("expected node action pkg.install, got %q", list[0].Node.Action)
+	data, ok := list[0].Node.Data["action"].(string)
+	if !ok || data != "pkg.install" {
+		t.Fatalf("expected node action pkg.install, got %v", list[0].Node.Data["action"])
 	}
 	if err := store.Delete("demo"); err != nil {
 		t.Fatalf("delete: %v", err)
