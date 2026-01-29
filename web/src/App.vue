@@ -1,54 +1,46 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, watch } from "vue";
 import { useRoute } from "vue-router";
+import { activeWorkflow as storedWorkflow, refreshActiveWorkflow, setActiveWorkflow } from "./lib/activeWorkflow";
 
 const route = useRoute();
 const routeName = computed(() => String(route.name || ""));
-const activeWorkflow = computed(() => {
+const activeWorkflowName = computed(() => {
   if (typeof route.params.name === "string") return route.params.name;
   if (typeof route.query.workflow === "string") return route.query.workflow;
-  return "";
+  return storedWorkflow.value;
 });
-const hasWorkflow = computed(() => activeWorkflow.value.length > 0);
+const hasWorkflow = computed(() => activeWorkflowName.value.length > 0);
+
+watch(
+  () => [route.params.name, route.query.workflow],
+  ([paramName, queryName]) => {
+    const next =
+      typeof paramName === "string"
+        ? paramName
+        : typeof queryName === "string"
+          ? queryName
+          : "";
+    if (next) {
+      setActiveWorkflow(next);
+      return;
+    }
+    refreshActiveWorkflow();
+  },
+  { immediate: true }
+);
 
 const isFullHeightPage = computed(() =>
   ["run-console", "validation-console", "workflow-flow"].includes(routeName.value)
 );
 
-const hideTopbarTitle = computed(() =>
-  [
-    "home",
-    "workflows",
-    "runs",
-    "workflow-runs",
-    "run-console",
-    "validation-console",
-    "envs",
-    "validation-envs",
-    "scripts",
-    "settings"
-  ].includes(routeName.value)
+const isWorkspaceRoute = computed(() => ["home", "workflows"].includes(routeName.value));
+const showTopbar = computed(() => routeName.value === "home");
+const workspaceLink = computed(() => (hasWorkflow.value ? "/" : "/workflows"));
+
+const displayWorkflowName = computed(() =>
+  hasWorkflow.value ? activeWorkflowName.value : "未选择工作流"
 );
-
-const showTopbarTitle = computed(() => !hideTopbarTitle.value);
-const showTopbar = computed(() => showTopbarTitle.value || showSwitch.value);
-
-const pageTitle = computed(() => {
-  if (hasWorkflow.value) return activeWorkflow.value;
-  if (routeName.value === "workflows") return "选择工作流";
-  if (routeName.value === "runs") return "运行记录";
-  if (routeName.value === "run-console") return "运行控制台";
-  if (routeName.value === "validation-console") return "验证终端";
-  if (routeName.value === "validation-envs") return "验证环境";
-  if (routeName.value === "scripts") return "脚本库";
-  if (routeName.value === "settings") return "设置";
-  return "BOPS";
-});
-
-const showMeta = computed(() =>
-  hasWorkflow.value && ["workflow", "workflow-flow"].includes(routeName.value)
-);
-const showSwitch = computed(() => hasWorkflow.value);
 </script>
 
 <template>
@@ -59,8 +51,9 @@ const showSwitch = computed(() => hasWorkflow.value);
         <div class="subtitle">工作流控制台</div>
       </div>
       <nav class="nav">
-        <RouterLink class="nav-item" active-class="active" to="/">首页</RouterLink>
-        <RouterLink class="nav-item" active-class="active" to="/workflows">工作流</RouterLink>
+        <RouterLink class="nav-item" :class="{ active: isWorkspaceRoute }" :to="workspaceLink">
+          工作区
+        </RouterLink>
         <RouterLink class="nav-item" active-class="active" to="/envs">环境变量包</RouterLink>
         <RouterLink class="nav-item" active-class="active" to="/validation-envs">验证环境</RouterLink>
         <RouterLink class="nav-item" active-class="active" to="/scripts">脚本库</RouterLink>
@@ -70,38 +63,31 @@ const showSwitch = computed(() => hasWorkflow.value);
       <div class="workflow-group">
         <div class="group-title">当前工作流</div>
         <div v-if="hasWorkflow" class="workflow-card">
-          <div class="workflow-name">{{ activeWorkflow }}</div>
+          <div class="workflow-name">{{ activeWorkflowName }}</div>
           <div class="workflow-meta">最近保存 2 分钟前</div>
         </div>
         <RouterLink v-else class="workflow-empty" to="/workflows">
           选择一个工作流
         </RouterLink>
-        <div v-if="hasWorkflow" class="workflow-actions">
-          <RouterLink class="nav-item" active-class="active" :to="`/workflows/${activeWorkflow}`">
-            工作流编排
-          </RouterLink>
-          <RouterLink class="nav-item" active-class="active" :to="`/workflows/${activeWorkflow}/flow`">
-            流程视图
-          </RouterLink>
-          <RouterLink class="nav-item" active-class="active" :to="`/workflows/${activeWorkflow}/runs`">
-            运行记录
-          </RouterLink>
-        </div>
       </div>
     </aside>
 
     <div class="main">
       <header v-if="showTopbar" class="topbar">
-        <div v-if="showTopbarTitle">
-          <div class="title">{{ pageTitle }}</div>
-          <div v-if="showMeta" class="meta">
-            上次保存 2 分钟前
-          </div>
+        <div class="topbar-workflow">
+          <span class="topbar-label">当前工作流</span>
+          <span class="topbar-name">{{ displayWorkflowName }}</span>
         </div>
-        <div v-else class="title-spacer"></div>
-        <div class="actions">
-          <RouterLink v-if="showSwitch" class="btn ghost" to="/workflows">
-            切换工作流
+        <div class="topbar-actions">
+          <RouterLink class="btn ghost" to="/workflows">切换工作区</RouterLink>
+          <RouterLink v-if="hasWorkflow" class="btn ghost" :to="`/workflows/${activeWorkflowName}`">
+            工作流编排
+          </RouterLink>
+          <RouterLink v-if="hasWorkflow" class="btn ghost" :to="`/workflows/${activeWorkflowName}/flow`">
+            流程视图
+          </RouterLink>
+          <RouterLink v-if="hasWorkflow" class="btn ghost" :to="`/workflows/${activeWorkflowName}/runs`">
+            运行记录
           </RouterLink>
         </div>
       </header>
@@ -230,11 +216,39 @@ const showSwitch = computed(() => hasWorkflow.value);
     align-items: center;
     justify-content: space-between;
     padding: 24px 32px 16px;
+    gap: 16px;
   }
 
 .title {
   font-family: "Space Grotesk", sans-serif;
   font-size: 20px;
+}
+
+.topbar-workflow {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.topbar-label {
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.topbar-name {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.topbar-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .meta {

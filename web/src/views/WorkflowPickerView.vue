@@ -80,6 +80,7 @@
 import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import { ApiError, request } from "../lib/api";
+import { activeWorkflow, refreshActiveWorkflow, setActiveWorkflow } from "../lib/activeWorkflow";
 
 type WorkflowCard = {
   name: string;
@@ -95,7 +96,7 @@ type WorkflowListResponse = {
 
 const router = useRouter();
 const query = ref("");
-const recentWorkflow = ref(localStorage.getItem("bops-last-workflow") || "");
+const recentWorkflow = computed(() => activeWorkflow.value);
 const loading = ref(false);
 const error = ref("");
 
@@ -111,9 +112,8 @@ const filteredWorkflows = computed(() => {
 });
 
 function selectWorkflow(name: string) {
-  localStorage.setItem("bops-last-workflow", name);
-  recentWorkflow.value = name;
-  router.push(`/workflows/${name}`);
+  setActiveWorkflow(name);
+  router.push("/");
 }
 
 async function createWorkflow() {
@@ -201,6 +201,7 @@ steps:
 }
 
 onMounted(() => {
+  refreshActiveWorkflow();
   loadWorkflows();
 });
 </script>
