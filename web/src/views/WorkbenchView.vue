@@ -280,7 +280,7 @@ function updateLinkingPosition(event: MouseEvent) {
   };
 }
 
-function startDrag(node: { id: string }, event: MouseEvent) {
+function startDrag(node: { id: string; x: number; y: number }, event: MouseEvent) {
   if (!canvasRef.value) return;
   if (event.button !== 0) return;
   const target = event.target as HTMLElement | null;

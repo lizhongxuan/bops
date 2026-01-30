@@ -87,7 +87,11 @@ func (p *Pipeline) generate(ctx context.Context, state *State) (*State, error) {
 	}
 	state.YAML = yamlText
 	state.Questions = mergeQuestions(state.Questions, questions)
-	emitEvent(state, "generator", "done", "")
+	if strings.TrimSpace(state.YAML) != "" {
+		emitEventWithData(state, "generator", "done", "", map[string]any{"yaml": state.YAML})
+	} else {
+		emitEvent(state, "generator", "done", "")
+	}
 	logging.L().Debug("aiworkflow generate done",
 		zap.Int("yaml_len", len(state.YAML)),
 		zap.Int("questions", len(state.Questions)),
@@ -133,13 +137,21 @@ func (p *Pipeline) fix(ctx context.Context, state *State) (*State, error) {
 	if strings.TrimSpace(state.BaseYAML) != "" {
 		yamlText = mergeStepsIntoBase(state.BaseYAML, yamlText)
 	}
+	prevYAML := state.YAML
 	if strings.TrimSpace(yamlText) != "" {
 		state.History = append(state.History, state.YAML)
 		state.YAML = yamlText
 	}
 	state.Questions = mergeQuestions(state.Questions, questions)
 	state.RetryCount++
-	emitEvent(state, "fixer", "done", "")
+	if strings.TrimSpace(state.YAML) != "" {
+		emitEventWithData(state, "fixer", "done", "", map[string]any{
+			"yaml":      state.YAML,
+			"prev_yaml": prevYAML,
+		})
+	} else {
+		emitEvent(state, "fixer", "done", "")
+	}
 	logging.L().Debug("aiworkflow fix done",
 		zap.Int("yaml_len", len(state.YAML)),
 		zap.Int("questions", len(state.Questions)),
@@ -256,14 +268,50 @@ func (p *Pipeline) humanGate(_ context.Context, state *State) (*State, error) {
 }
 
 func emitEvent(state *State, node, status, message string) {
+	emitEventWithData(state, node, status, message, nil)
+}
+
+func emitEventWithData(state *State, node, status, message string, data map[string]any) {
 	if state == nil || state.EventSink == nil {
 		return
 	}
+	displayName := mapNodeDisplayName(node)
 	state.EventSink(Event{
-		Node:    node,
-		Status:  status,
-		Message: message,
+		Node:        node,
+		Status:      status,
+		Message:     message,
+		CallID:      node,
+		DisplayName: displayName,
+		Stage:       status,
+		Data:        data,
 	})
+}
+
+func mapNodeDisplayName(node string) string {
+	switch node {
+	case "normalize":
+		return "规范化输入"
+	case "intent_extract":
+		return "意图解析"
+	case "question_gate":
+		return "问题补全"
+	case "generator":
+		return "生成工作流"
+	case "validator":
+		return "校验工作流"
+	case "safety":
+		return "安全检查"
+	case "executor":
+		return "执行验证"
+	case "fixer":
+		return "修复工作流"
+	case "summarizer":
+		return "总结结果"
+	case "human_gate":
+		return "人工确认"
+	default:
+		return node
+	}
 }
 
 func (p *Pipeline) chatWithThought(ctx context.Context, messages []ai.Message, sink StreamSink) (string, string, error) {

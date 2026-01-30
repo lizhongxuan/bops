@@ -3,9 +3,8 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"html"
 	"net/http"
-	"strconv"
+	"reflect"
 	"strings"
 	"time"
 
@@ -112,16 +111,29 @@ type aiStreamRequest struct {
 	DraftID    string         `json:"draft_id,omitempty"`
 }
 
-type uiResource struct {
-	Type     string         `json:"type"`
-	Resource uiResourceBody `json:"resource"`
+const (
+	cardTypeFileCreate = "file_create"
+	cardTypeCreateStep = "create_step"
+	cardTypeUpdateStep = "update_step"
+)
+
+type streamMessage struct {
+	MessageID        string           `json:"message_id"`
+	ReplyID          string           `json:"reply_id"`
+	Role             string           `json:"role"`
+	Type             string           `json:"type"`
+	Content          string           `json:"content"`
+	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	IsFinish         bool             `json:"is_finish"`
+	Index            int              `json:"index"`
+	ExtraInfo        streamMessageExt `json:"extra_info"`
 }
 
-type uiResourceBody struct {
-	URI      string `json:"uri"`
-	MimeType string `json:"mimeType"`
-	Text     string `json:"text,omitempty"`
-	Blob     string `json:"blob,omitempty"`
+type streamMessageExt struct {
+	CallID             string `json:"call_id,omitempty"`
+	ExecuteDisplayName string `json:"execute_display_name,omitempty"`
+	PluginStatus       string `json:"plugin_status,omitempty"`
+	MessageTitle       string `json:"message_title,omitempty"`
 }
 
 func (s *Server) handleAIChatSessions(w http.ResponseWriter, r *http.Request) {
@@ -568,6 +580,8 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 		envName = env.Name
 		envType = string(env.Type)
 	}
+	replyID := fmt.Sprintf("reply-%d", time.Now().UnixNano())
+	eventIndex := 0
 	logging.L().Debug("ai workflow stream start",
 		zap.String("mode", mode),
 		zap.Int("prompt_len", len(strings.TrimSpace(req.Prompt))),
@@ -642,18 +656,84 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 		case evt, ok := <-events:
 			if ok {
 				writeSSE(w, "status", evt)
+				if msg, ok := buildStreamMessageFromEvent(evt, replyID, eventIndex); ok {
+					writeSSE(w, "message", msg)
+					eventIndex++
+				}
+				if evt.Node == "generator" && evt.Status == "done" {
+					if yamlText, ok := evt.Data["yaml"].(string); ok {
+						trimmedYAML := strings.TrimSpace(yamlText)
+						if trimmedYAML != "" {
+							for _, card := range buildCreateStepCards(trimmedYAML, replyID) {
+								writeSSE(w, "card", card)
+								flusher.Flush()
+							}
+							writeSSE(w, "card", map[string]any{
+								"card_id":   "file-create",
+								"reply_id":  replyID,
+								"card_type": cardTypeFileCreate,
+								"title":     "创建文件",
+								"files": []map[string]string{
+									{
+										"path":     "workflow.yaml",
+										"language": "yaml",
+										"content":  trimmedYAML,
+									},
+								},
+							})
+							flusher.Flush()
+						}
+					}
+				}
+				if evt.Node == "fixer" && evt.Status == "done" {
+					if yamlText, ok := evt.Data["yaml"].(string); ok {
+						trimmedYAML := strings.TrimSpace(yamlText)
+						if trimmedYAML != "" {
+							prevYAML, _ := evt.Data["prev_yaml"].(string)
+							for _, card := range buildUpdateStepCards(prevYAML, trimmedYAML, replyID) {
+								writeSSE(w, "card", card)
+								flusher.Flush()
+							}
+							writeSSE(w, "card", map[string]any{
+								"card_id":   "file-create",
+								"reply_id":  replyID,
+								"card_type": cardTypeFileCreate,
+								"title":     "创建文件",
+								"files": []map[string]string{
+									{
+										"path":     "workflow.yaml",
+										"language": "yaml",
+										"content":  trimmedYAML,
+									},
+								},
+							})
+							flusher.Flush()
+						}
+					}
+				}
 				flusher.Flush()
 				continue
 			}
 			events = nil
 		case delta, ok := <-streamCh:
 			if ok {
+				wrote := false
 				if delta.Thought != "" {
 					sentThoughtDelta = true
 					writeSSE(w, "delta", map[string]any{
 						"channel": "thought",
 						"content": delta.Thought,
 					})
+					wrote = true
+				}
+				if delta.Content != "" {
+					writeSSE(w, "delta", map[string]any{
+						"channel": "answer",
+						"content": delta.Content,
+					})
+					wrote = true
+				}
+				if wrote {
 					flusher.Flush()
 				}
 				continue
@@ -697,6 +777,28 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 				title = "AI Fix"
 			}
 			draftID := s.saveAIDraft(req.DraftID, title, prompt, pending.state)
+			if pending.state != nil {
+				trimmedYAML := strings.TrimSpace(pending.state.YAML)
+				if trimmedYAML != "" {
+					path := "workflow.yaml"
+					if strings.TrimSpace(draftID) != "" {
+						path = fmt.Sprintf("workflows/%s.yaml", draftID)
+					}
+					writeSSE(w, "card", map[string]any{
+						"card_id":   "file-create",
+						"reply_id":  replyID,
+						"card_type": cardTypeFileCreate,
+						"title":     "创建文件",
+						"files": []map[string]string{
+							{
+								"path":     path,
+								"language": "yaml",
+								"content":  trimmedYAML,
+							},
+						},
+					})
+				}
+			}
 			payload := map[string]any{
 				"yaml":         pending.state.YAML,
 				"summary":      pending.state.Summary,
@@ -706,9 +808,6 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 				"questions":    pending.state.Questions,
 				"history":      pending.state.History,
 				"draft_id":     draftID,
-			}
-			if uiRes := buildWorkflowUIResource(pending.state, draftID); uiRes != nil {
-				payload["ui_resource"] = uiRes
 			}
 			logging.L().Debug("ai workflow stream result",
 				zap.String("mode", mode),
@@ -737,11 +836,64 @@ func countStepsInYAML(yamlText string) int {
 	return count
 }
 
-func buildWorkflowUIResource(state *aiworkflow.State, draftID string) *uiResource {
-	if state == nil {
-		return nil
+func buildExecuteDisplayName(displayName string) string {
+	trimmed := strings.TrimSpace(displayName)
+	if trimmed == "" {
+		return ""
 	}
-	trimmed := strings.TrimSpace(state.YAML)
+	payload := map[string]string{
+		"name_executing":     "正在" + trimmed,
+		"name_executed":      "已完成" + trimmed,
+		"name_execute_failed": trimmed + "失败",
+	}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func buildStreamMessageFromEvent(evt aiworkflow.Event, replyID string, index int) (streamMessage, bool) {
+	if strings.TrimSpace(evt.Node) == "" {
+		return streamMessage{}, false
+	}
+	callID := strings.TrimSpace(evt.CallID)
+	if callID == "" {
+		callID = evt.Node
+	}
+	displayName := strings.TrimSpace(evt.DisplayName)
+	if displayName == "" {
+		displayName = evt.Node
+	}
+	msgType := "tool_response"
+	isFinish := true
+	if evt.Status == "start" {
+		msgType = "function_call"
+		isFinish = false
+	}
+	pluginStatus := "0"
+	if evt.Status == "error" {
+		pluginStatus = "1"
+	}
+	messageID := fmt.Sprintf("%s-%s-%d", callID, evt.Status, index)
+	return streamMessage{
+		MessageID: messageID,
+		ReplyID:   replyID,
+		Role:      "assistant",
+		Type:      msgType,
+		Content:   evt.Message,
+		IsFinish:  isFinish,
+		Index:     index,
+		ExtraInfo: streamMessageExt{
+			CallID:             callID,
+			ExecuteDisplayName: buildExecuteDisplayName(displayName),
+			PluginStatus:       pluginStatus,
+		},
+	}, true
+}
+
+func buildCreateStepCards(yamlText, replyID string) []map[string]any {
+	trimmed := strings.TrimSpace(yamlText)
 	if trimmed == "" {
 		return nil
 	}
@@ -749,93 +901,89 @@ func buildWorkflowUIResource(state *aiworkflow.State, draftID string) *uiResourc
 	if err != nil {
 		return nil
 	}
-	var builder strings.Builder
-	builder.WriteString("<!doctype html><html><head><meta charset=\"utf-8\"/>")
-	builder.WriteString("<style>")
-	builder.WriteString("body{margin:0;padding:12px;font-family:Inter,system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f8f6f2;color:#2b2b2b}")
-	builder.WriteString(".card{background:#fff;border:1px solid #e5e1db;border-radius:14px;padding:12px;box-shadow:0 8px 20px rgba(0,0,0,0.06)}")
-	builder.WriteString(".title{font-size:14px;font-weight:600;margin-bottom:4px}")
-	builder.WriteString(".meta{font-size:12px;color:#6b6b6b;margin-bottom:10px}")
-	builder.WriteString(".summary{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px}")
-	builder.WriteString(".pill{font-size:11px;padding:4px 8px;border-radius:999px;border:1px solid #e5e1db;background:#f3f0ea;color:#4a4a4a}")
-	builder.WriteString(".pill.ok{background:rgba(42,157,75,0.12);border-color:rgba(42,157,75,0.3);color:#2a9d4b}")
-	builder.WriteString(".pill.warn{background:rgba(230,167,0,0.12);border-color:rgba(230,167,0,0.3);color:#b27600}")
-	builder.WriteString(".pill.risk-low{background:rgba(42,157,75,0.12);border-color:rgba(42,157,75,0.3);color:#2a9d4b}")
-	builder.WriteString(".pill.risk-medium{background:rgba(230,167,0,0.12);border-color:rgba(230,167,0,0.3);color:#b27600}")
-	builder.WriteString(".pill.risk-high{background:rgba(208,52,44,0.12);border-color:rgba(208,52,44,0.3);color:#d0342c}")
-	builder.WriteString(".section{margin-top:12px}")
-	builder.WriteString(".section-title{font-size:12px;color:#6b6b6b;margin-bottom:6px}")
-	builder.WriteString(".chips{display:flex;flex-wrap:wrap;gap:6px}")
-	builder.WriteString(".chip{border:1px solid #e5e1db;background:#fff;border-radius:999px;padding:4px 8px;font-size:11px;cursor:pointer}")
-	builder.WriteString("ol{margin:0;padding-left:18px;display:flex;flex-direction:column;gap:6px}")
-	builder.WriteString("li{font-size:12px;cursor:pointer}")
-	builder.WriteString(".action{color:#6b6b6b;margin-left:6px}")
-	builder.WriteString("</style></head><body>")
-	builder.WriteString("<div class=\"card\">")
-	builder.WriteString("<div class=\"title\">工作流概览</div>")
-	issueCount := len(state.Issues)
-	questionCount := len(state.Questions)
-	validationText := "校验通过"
-	validationClass := "ok"
-	if issueCount > 0 {
-		validationText = "待修复"
-		validationClass = "warn"
+	cards := make([]map[string]any, 0, len(wf.Steps))
+	for i, step := range wf.Steps {
+		cards = append(cards, map[string]any{
+			"card_id":    fmt.Sprintf("step-create-%d", i),
+			"reply_id":   replyID,
+			"card_type":  cardTypeCreateStep,
+			"title":      "创建步骤",
+			"step_index": i,
+			"step":       stepPayload(step),
+		})
 	}
-	riskLevel := strings.ToLower(strings.TrimSpace(string(state.RiskLevel)))
-	if riskLevel == "" {
-		riskLevel = "unknown"
+	return cards
+}
+
+func buildUpdateStepCards(prevYAML, yamlText, replyID string) []map[string]any {
+	trimmed := strings.TrimSpace(yamlText)
+	if trimmed == "" {
+		return nil
 	}
-	riskLabel := html.EscapeString(riskLevel)
-	riskClass := "risk-" + riskLevel
-	if riskLevel == "unknown" {
-		riskLabel = "unknown"
-		riskClass = ""
+	wf, err := workflow.Load([]byte(trimmed))
+	if err != nil {
+		return nil
 	}
-	builder.WriteString("<div class=\"summary\">")
-	if riskClass != "" {
-		builder.WriteString("<span class=\"pill " + riskClass + "\">风险 " + riskLabel + "</span>")
-	} else {
-		builder.WriteString("<span class=\"pill\">风险 " + riskLabel + "</span>")
+	prevTrimmed := strings.TrimSpace(prevYAML)
+	if prevTrimmed == "" {
+		return buildCreateStepCards(trimmed, replyID)
 	}
-	builder.WriteString("<span class=\"pill " + validationClass + "\">" + validationText + "</span>")
-	builder.WriteString("<span class=\"pill\">问题 " + strconv.Itoa(issueCount) + "</span>")
-	builder.WriteString("<span class=\"pill\">追问 " + strconv.Itoa(questionCount) + "</span>")
-	builder.WriteString("</div>")
-	builder.WriteString("<div class=\"meta\">步骤数: " + strconv.Itoa(len(wf.Steps)) + "</div>")
-	builder.WriteString("<ol>")
-	for index, step := range wf.Steps {
-		name := html.EscapeString(step.Name)
-		action := html.EscapeString(step.Action)
-		if name == "" {
-			name = "(unnamed step)"
+	prevWf, err := workflow.Load([]byte(prevTrimmed))
+	if err != nil {
+		return buildCreateStepCards(trimmed, replyID)
+	}
+	prevMap := map[string]workflow.Step{}
+	for i, step := range prevWf.Steps {
+		prevMap[stepKey(step, i)] = step
+	}
+	cards := make([]map[string]any, 0, len(wf.Steps))
+	for i, step := range wf.Steps {
+		key := stepKey(step, i)
+		if prevStep, ok := prevMap[key]; ok {
+			if reflect.DeepEqual(prevStep, step) {
+				continue
+			}
+			cards = append(cards, map[string]any{
+				"card_id":    fmt.Sprintf("step-update-%d", i),
+				"reply_id":   replyID,
+				"card_type":  cardTypeUpdateStep,
+				"title":      "修改步骤",
+				"step_index": i,
+				"before":     stepPayload(prevStep),
+				"after":      stepPayload(step),
+			})
+			continue
 		}
-		stepIndex := strconv.Itoa(index)
-		if action != "" {
-			builder.WriteString("<li data-step-index=\"" + stepIndex + "\">" + name + "<span class=\"action\">" + action + "</span></li>")
-		} else {
-			builder.WriteString("<li data-step-index=\"" + stepIndex + "\">" + name + "</li>")
-		}
+		cards = append(cards, map[string]any{
+			"card_id":    fmt.Sprintf("step-create-%d", i),
+			"reply_id":   replyID,
+			"card_type":  cardTypeCreateStep,
+			"title":      "创建步骤",
+			"step_index": i,
+			"step":       stepPayload(step),
+		})
 	}
-	builder.WriteString("</ol>")
-	builder.WriteString("</div>")
-	builder.WriteString("<script>(function(){function send(type,payload){window.parent.postMessage({type:type,payload:payload},\"*\");}")
-	builder.WriteString("function sendSize(){var doc=document.documentElement,body=document.body;var height=Math.max(doc?doc.scrollHeight:0,doc?doc.offsetHeight:0,doc?doc.clientHeight:0,body?body.scrollHeight:0,body?body.offsetHeight:0,body?body.clientHeight:0);var width=Math.max(doc?doc.scrollWidth:0,doc?doc.offsetWidth:0,doc?doc.clientWidth:0,body?body.scrollWidth:0,body?body.offsetWidth:0,body?body.clientWidth:0);if(height||width){send('ui-size-change',{width:width,height:height});}}")
-	builder.WriteString("var target=document.body||document.documentElement;if(typeof ResizeObserver!=='undefined'&&target){var ro=new ResizeObserver(function(){sendSize();});ro.observe(target);}window.addEventListener('load',function(){setTimeout(sendSize,0);});setTimeout(sendSize,120);")
-	builder.WriteString("document.querySelectorAll('[data-step-index]').forEach(function(item){item.addEventListener('click',function(){var idx=parseInt(item.getAttribute('data-step-index')||'-1',10);if(idx>=0){send('focus_step',{index:idx});}});});")
-	builder.WriteString("})();</script>")
-	builder.WriteString("</body></html>")
-	uri := strings.TrimSpace(draftID)
-	if uri == "" {
-		uri = strconv.FormatInt(time.Now().UnixNano(), 10)
+	return cards
+}
+
+func stepKey(step workflow.Step, index int) string {
+	name := strings.TrimSpace(step.Name)
+	if name == "" {
+		return fmt.Sprintf("index-%d", index)
 	}
-	return &uiResource{
-		Type: "resource",
-		Resource: uiResourceBody{
-			URI:      "ui://bops/workflow/" + uri,
-			MimeType: "text/html",
-			Text:     builder.String(),
-		},
+	return name
+}
+
+func stepPayload(step workflow.Step) map[string]any {
+	payload := map[string]any{
+		"name":    step.Name,
+		"action":  step.Action,
+		"targets": step.Targets,
 	}
+	if len(step.With) > 0 {
+		payload["with"] = step.With
+	}
+	return payload
 }
 
 func writeSSE(w http.ResponseWriter, event string, payload any) {

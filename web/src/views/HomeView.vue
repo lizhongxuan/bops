@@ -15,7 +15,7 @@
         <div class="chat-body" ref="chatBodyRef" @scroll="handleChatScroll">
           <ul class="timeline">
             <li v-for="entry in timelineEntries" :key="entry.id" :class="['timeline-item', entry.type]">
-              <div v-if="entry.type !== 'ui'" class="timeline-header">
+              <div v-if="entry.type !== 'ui' && entry.type !== 'card'" class="timeline-header">
                 <span class="timeline-badge" :class="entry.type">{{ entry.label }}</span>
                 <small v-if="entry.extra">{{ entry.extra }}</small>
               </div>
@@ -25,34 +25,37 @@
                   <p v-if="entry.body">{{ entry.body }}</p>
                 </details>
               </div>
+              <div v-else-if="entry.type === 'function_call'" class="function-call-card">
+                <FunctionCallPanel :items="entry.functionCalls || []" />
+              </div>
+              <div v-else-if="entry.type === 'card'" class="card-entry">
+                <CardRenderer :card="entry.card || { card_type: 'unknown' }" />
+              </div>
               <div v-else-if="entry.type === 'ui'" class="ui-resource-card">
-                <details class="ui-resource-details" open>
-                  <summary class="ui-resource-summary">工作流卡片</summary>
-                  <div class="ui-resource-content">
-                    <ui-resource-renderer
-                      v-if="mcpUiReady"
-                      :resource.prop="entry.resource"
-                      :htmlProps.prop="{ autoResizeIframe: { height: true } }"
-                      class="ui-resource-host"
-                    ></ui-resource-renderer>
-                    <iframe
-                      v-else-if="isHtmlResource(entry.resource)"
-                      class="ui-resource-frame"
-                      :srcdoc="entry.resource?.text || ''"
-                      sandbox="allow-scripts allow-same-origin"
-                    ></iframe>
-                    <a
-                      v-else-if="isUriResource(entry.resource)"
-                      class="ui-resource-link"
-                      :href="entry.resource?.text"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                    >
-                      Open UI Resource
-                    </a>
-                    <div v-else class="ui-resource-fallback">UI resource unavailable.</div>
-                  </div>
-                </details>
+                <div class="ui-resource-content">
+                  <ui-resource-renderer
+                    v-if="mcpUiReady"
+                    :resource.prop="entry.resource"
+                    :htmlProps.prop="{ autoResizeIframe: { height: true } }"
+                    class="ui-resource-host"
+                  ></ui-resource-renderer>
+                  <iframe
+                    v-else-if="isHtmlResource(entry.resource)"
+                    class="ui-resource-frame"
+                    :srcdoc="entry.resource?.text || ''"
+                    sandbox="allow-scripts allow-same-origin"
+                  ></iframe>
+                  <a
+                    v-else-if="isUriResource(entry.resource)"
+                    class="ui-resource-link"
+                    :href="entry.resource?.text"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Open UI Resource
+                  </a>
+                  <div v-else class="ui-resource-fallback">UI resource unavailable.</div>
+                </div>
               </div>
               <p v-else-if="entry.body">{{ entry.body }}</p>
               <div v-if="entry.actionLabel" class="timeline-actions">
@@ -61,13 +64,7 @@
                 </button>
               </div>
             </li>
-            <li v-if="chatPending" class="timeline-item typing">
-              <div class="timeline-header">
-                <span class="timeline-badge ai">{{ aiDisplayName }}</span>
-                <small>...</small>
-              </div>
-              <p>正在回复...</p>
-            </li>
+            <li v-if="false" class="timeline-item typing"></li>
           </ul>
         </div>
 
@@ -98,10 +95,8 @@
             未配置AI,无法使用,请
             <button class="link-button" type="button" @click="goToSettings">设置</button>
           </div>
-          <div v-if="streamStatus" class="stream-status" :class="streamStatusType">
-            {{ streamStatus }}
-          </div>
-          <div v-if="recentProgressEvents.length && !streamStatus" class="progress-mini">
+          <div v-if="false" class="stream-status"></div>
+          <div v-if="false" class="progress-mini">
             <div
               class="progress-mini-item"
               v-for="(evt, index) in recentProgressEvents"
@@ -638,6 +633,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { useRouter } from "vue-router";
 import { ApiError, apiBase, request } from "../lib/api";
 import StepDetailForm from "../components/StepDetailForm.vue";
+import FunctionCallPanel, { type FunctionCallUnit } from "../components/FunctionCallPanel.vue";
+import CardRenderer, { type CardPayload } from "../components/CardRenderer.vue";
 import { normalizeQuestions, resolveQuestions } from "../lib/ai-questions";
 import { createDefaultStepWith, type DraftStep } from "../lib/draft";
 import { parseSteps, type StepSummary } from "../lib/workflowSteps";
@@ -685,10 +682,30 @@ type ChatEntry = {
   label: string;
   body: string;
   type: string;
+  replyId?: string;
+  cardId?: string;
   extra?: string;
   action?: "fix";
   actionLabel?: string;
   resource?: UIResourceBody | null;
+  functionCalls?: FunctionCallUnit[];
+  card?: CardPayload;
+};
+
+type StreamMessage = {
+  message_id?: string;
+  reply_id?: string;
+  role?: string;
+  type?: string;
+  content?: string;
+  index?: number;
+  is_finish?: boolean;
+  extra_info?: {
+    call_id?: string;
+    execute_display_name?: string;
+    plugin_status?: string;
+    message_title?: string;
+  };
 };
 
 type UIResourceBody = {
@@ -778,6 +795,7 @@ const chatEntries = ref<ChatEntry[]>([
     type: "ai"
   }
 ]);
+const currentReplyId = ref<string | null>(null);
 const chatPending = ref(false);
 const chatBodyRef = ref<HTMLElement | null>(null);
 const stepsListRef = ref<HTMLElement | null>(null);
@@ -787,8 +805,10 @@ const liveThoughtEntryId = ref<string | null>(null);
 const liveThoughtText = ref("");
 const liveAnswerEntryId = ref<string | null>(null);
 const hasStreamDelta = ref(false);
+const streamResultReceived = ref(false);
 let liveAnswerTimer: number | null = null;
 const activeNodes = ref<string[]>([]);
+const functionCallEntryIds = ref<Record<string, string>>({});
 const chatSessions = ref<ChatSessionSummary[]>([]);
 const chatSessionId = ref("");
 const chatSessionTitle = ref("");
@@ -805,6 +825,8 @@ const streamStatus = ref("");
 const streamStatusType = ref("");
 const lastStatusError = ref("");
 const lastStreamError = ref("");
+type ChatPhase = "idle" | "sending" | "waiting" | "responding";
+const chatPhase = ref<ChatPhase>("idle");
 const summary = ref<SummaryState>({
   summary: "",
   steps: 0,
@@ -838,6 +860,7 @@ const router = useRouter();
 const SESSION_STORAGE_KEY = "bops_chat_session_id";
 const DRAFT_STORAGE_KEY = "bops_workflow_draft";
 const VALIDATION_CONSOLE_KEY = "bops.validation-console";
+const AUTO_SCROLL_THRESHOLD = 60;
 
 const examples = [
   "在 web1/web2 上安装 nginx，渲染配置并启动服务",
@@ -868,9 +891,27 @@ const workspaceTab = ref<"visual" | "yaml" | "validate">("visual");
 const visualYamlSource = computed(() => (autoSync.value ? yaml.value : visualYaml.value));
 const steps = computed<StepSummary[]>(() => parseSteps(visualYamlSource.value));
 const draftSteps = computed<DraftStep[]>(() => steps.value.map((step, index) => buildDraftStep(step, index)));
-const timelineEntries = computed(() => {
-  return chatEntries.value;
+type ChatGroup = {
+  replyId: string;
+  entries: ChatEntry[];
+};
+const chatGroups = computed<ChatGroup[]>(() => {
+  const order: string[] = [];
+  const map = new Map<string, ChatEntry[]>();
+  chatEntries.value.forEach((entry) => {
+    const key = entry.replyId || entry.id;
+    if (!map.has(key)) {
+      map.set(key, []);
+      order.push(key);
+    }
+    map.get(key)?.push(entry);
+  });
+  return order.map((key) => ({
+    replyId: key,
+    entries: map.get(key) || []
+  }));
 });
+const timelineEntries = computed(() => chatGroups.value.flatMap((group) => group.entries));
 const requiresReason = computed(() => summary.value.riskLevel === "high");
 const requiresConfirm = computed(() => {
   if (!summary.value.needsReview) return false;
@@ -899,6 +940,7 @@ const syncBlocked = computed(() => !autoSync.value && (visualDirty.value || yaml
 const canShowIssues = computed(() => !syncBlocked.value);
 
 let chatIndex = 0;
+let replyIndex = 0;
 let summaryTimer: number | null = null;
 let uiActionListener: ((event: Event) => void) | null = null;
 let chatScrollScheduled = false;
@@ -1097,7 +1139,8 @@ async function loadAIConfig() {
 
 function pushChatEntry(entry: Omit<ChatEntry, "id">) {
   const id = `chat-${chatIndex++}`;
-  chatEntries.value = [...chatEntries.value, { id, ...entry }];
+  const replyId = entry.replyId ?? currentReplyId.value ?? "";
+  chatEntries.value = [...chatEntries.value, { id, replyId, ...entry }];
   return id;
 }
 
@@ -1109,6 +1152,10 @@ function updateChatEntry(id: string, updater: (entry: ChatEntry) => ChatEntry) {
   chatEntries.value = next;
 }
 
+function nextReplyId() {
+  return `reply-${Date.now()}-${replyIndex++}`;
+}
+
 function resetStreamState() {
   if (liveAnswerTimer) {
     window.clearInterval(liveAnswerTimer);
@@ -1118,8 +1165,121 @@ function resetStreamState() {
   liveThoughtText.value = "";
   liveAnswerEntryId.value = null;
   hasStreamDelta.value = false;
+  streamResultReceived.value = false;
   activeNodes.value = [];
+  functionCallEntryIds.value = {};
   refreshActiveStatus();
+}
+
+function parseExecuteDisplayName(raw: string | undefined, phase: "executing" | "executed" | "failed") {
+  if (!raw) return "";
+  try {
+    const parsed = JSON.parse(raw) as Record<string, string>;
+    if (phase === "executing") return parsed.name_executing || "";
+    if (phase === "failed") return parsed.name_execute_failed || "";
+    return parsed.name_executed || "";
+  } catch {
+    return "";
+  }
+}
+
+function handleFunctionCallMessage(msg: StreamMessage) {
+  if (!msg || !msg.type) return;
+  if (msg.type !== "function_call" && msg.type !== "tool_response") return;
+  if (msg.type === "function_call") {
+    breakThoughtSegment();
+  }
+  if (msg.reply_id) {
+    currentReplyId.value = msg.reply_id;
+  }
+  const callId = msg.extra_info?.call_id || msg.message_id || `call-${Date.now()}`;
+  const isRunning = msg.type === "function_call";
+  const failed = msg.extra_info?.plugin_status === "1";
+  const status: FunctionCallUnit["status"] = isRunning ? "running" : failed ? "failed" : "done";
+  const phase = isRunning ? "executing" : failed ? "failed" : "executed";
+  const namedTitle = parseExecuteDisplayName(msg.extra_info?.execute_display_name, phase);
+  const title = namedTitle || msg.content || callId;
+  const index = typeof msg.index === "number" ? msg.index : undefined;
+  const nextUnit: FunctionCallUnit = {
+    callId,
+    title,
+    status,
+    content: msg.content,
+    index
+  };
+  const replyId = msg.reply_id || currentReplyId.value || "";
+  const entryId = functionCallEntryIds.value[callId];
+  if (entryId) {
+    updateChatEntry(entryId, (entry) => ({
+      ...entry,
+      replyId,
+      functionCalls: [nextUnit],
+      body: ""
+    }));
+    return;
+  }
+  const newId = pushChatEntry({
+    label: "步骤",
+    body: "",
+    type: "function_call",
+    extra: "STEP",
+    replyId,
+    functionCalls: [nextUnit]
+  });
+  functionCallEntryIds.value = { ...functionCallEntryIds.value, [callId]: newId };
+}
+
+function markResponding() {
+  if (chatPhase.value !== "responding") {
+    chatPhase.value = "responding";
+  }
+}
+
+function upsertCardEntry(card: CardPayload) {
+  const cardId = typeof (card as Record<string, unknown>).card_id === "string"
+    ? String((card as Record<string, unknown>).card_id)
+    : "";
+  const replyId = typeof (card as Record<string, unknown>).reply_id === "string"
+    ? String((card as Record<string, unknown>).reply_id)
+    : currentReplyId.value || "";
+  if (!cardId) {
+    pushChatEntry({
+      label: "卡片",
+      body: "",
+      type: "card",
+      extra: "CARD",
+      replyId,
+      card
+    });
+    return;
+  }
+  const existingIndex = chatEntries.value.findIndex((entry) => entry.cardId === cardId);
+  if (existingIndex >= 0) {
+    const id = chatEntries.value[existingIndex].id;
+    updateChatEntry(id, (entry) => ({
+      ...entry,
+      replyId,
+      cardId,
+      card
+    }));
+    return;
+  }
+  pushChatEntry({
+    label: "卡片",
+    body: "",
+    type: "card",
+    extra: "CARD",
+    replyId,
+    cardId,
+    card
+  });
+}
+
+function breakThoughtSegment() {
+  if (!liveThoughtEntryId.value) return;
+  finalizeThoughtStream();
+  liveThoughtEntryId.value = null;
+  liveThoughtText.value = "";
 }
 
 function ensureThoughtEntry() {
@@ -1220,7 +1380,7 @@ function updateChatAutoScroll() {
   const el = chatBodyRef.value;
   if (!el) return;
   const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-  chatAutoScroll.value = distance <= 40;
+  chatAutoScroll.value = distance <= AUTO_SCROLL_THRESHOLD;
 }
 
 function scrollChatToBottom(force = false) {
@@ -2629,6 +2789,7 @@ async function startStreamWithMessage(message: string, options: { clearPrompt?: 
     streamStatusType.value = "";
     return;
   }
+  chatPhase.value = "sending";
   if (options.clearPrompt) {
     prompt.value = "";
   }
@@ -2637,11 +2798,13 @@ async function startStreamWithMessage(message: string, options: { clearPrompt?: 
   lastStatusError.value = "";
   lastStreamError.value = "";
   await ensureChatSession();
+  currentReplyId.value = nextReplyId();
   pushChatEntry({ label: "用户", body: trimmed, type: "user" });
   resetStreamState();
   showExamples.value = false;
   questionOverrides.value = [];
   chatPending.value = true;
+  chatPhase.value = "waiting";
   void appendChatSessionMessage("user", trimmed);
   busy.value = true;
   streamError.value = "";
@@ -2664,6 +2827,7 @@ async function startStreamWithMessage(message: string, options: { clearPrompt?: 
   } finally {
     busy.value = false;
     chatPending.value = false;
+    chatPhase.value = "idle";
   }
 }
 
@@ -2705,6 +2869,22 @@ async function streamWorkflow(payload: Record<string, unknown>) {
       boundary = buffer.indexOf("\n\n");
     }
   }
+
+  if (!streamResultReceived.value && !streamError.value) {
+    const nextError = "流式连接中断";
+    streamError.value = nextError;
+    chatPending.value = false;
+    if (nextError !== lastStreamError.value) {
+      pushChatEntry({
+        label: "系统",
+        body: nextError,
+        type: "error",
+        extra: "ERROR"
+      });
+    }
+    lastStreamError.value = nextError;
+    chatPhase.value = "idle";
+  }
 }
 
 function handleSSEChunk(chunk: string) {
@@ -2738,6 +2918,12 @@ function handleSSEChunk(chunk: string) {
           });
         }
       }
+    } else if (eventName === "message") {
+      handleFunctionCallMessage(payload as StreamMessage);
+      markResponding();
+    } else if (eventName === "card") {
+      upsertCardEntry(payload as CardPayload);
+      markResponding();
     } else if (eventName === "delta") {
       const content = typeof payload.content === "string" ? payload.content : "";
       const channel = typeof payload.channel === "string" ? payload.channel : "answer";
@@ -2747,7 +2933,9 @@ function handleSSEChunk(chunk: string) {
         hasStreamDelta.value = true;
         appendAnswerDelta(content);
       }
+      markResponding();
     } else if (eventName === "result") {
+      streamResultReceived.value = true;
       const reply = applyResult(payload);
       const uiResource = normalizeUIResource(payload.ui_resource);
       if (uiResource) {
@@ -2769,7 +2957,9 @@ function handleSSEChunk(chunk: string) {
           startAnswerStream(reply);
         }
       }
+      chatPhase.value = "idle";
     } else if (eventName === "error") {
+      streamResultReceived.value = true;
       const nextError = translateErrorMessage(payload.error || "生成失败");
       streamError.value = nextError;
       chatPending.value = false;
@@ -2792,6 +2982,7 @@ function handleSSEChunk(chunk: string) {
       stopAnswerStream();
       activeNodes.value = [];
       refreshActiveStatus();
+      chatPhase.value = "idle";
     }
   } catch (err) {
     streamError.value = "解析流式数据失败";
@@ -3349,6 +3540,24 @@ function diffSummary(prev: string, next: string) {
   max-width: 100%;
 }
 
+.timeline-item.card {
+  align-self: stretch;
+  max-width: 100%;
+}
+
+.timeline-item.function_call {
+  align-self: stretch;
+  max-width: 100%;
+}
+
+.function-call-card {
+  padding: 4px 0;
+}
+
+.card-entry {
+  padding: 4px 0;
+}
+
 .thinking-toggle {
   border-radius: 10px;
   padding: 6px 8px;
@@ -3377,22 +3586,6 @@ function diffSummary(prev: string, next: string) {
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-
-.ui-resource-details {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.ui-resource-summary {
-  cursor: pointer;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.ui-resource-details[open] .ui-resource-summary {
-  color: #3c6fd6;
 }
 
 .ui-resource-content {

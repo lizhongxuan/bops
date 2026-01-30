@@ -76,9 +76,13 @@ type RunOptions struct {
 }
 
 type Event struct {
-	Node    string `json:"node"`
-	Status  string `json:"status"`
-	Message string `json:"message,omitempty"`
+	Node        string `json:"node"`
+	Status      string `json:"status"`
+	Message     string `json:"message,omitempty"`
+	CallID      string `json:"call_id,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
+	Stage       string `json:"stage,omitempty"`
+	Data        map[string]any `json:"data,omitempty"`
 }
 
 type EventSink func(Event)

@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720">
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#f6f3ee" />
+      <stop offset="100%" stop-color="#efe9df" />
+    </linearGradient>
+    <linearGradient id="card" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff" />
+      <stop offset="100%" stop-color="#faf7f1" />
+    </linearGradient>
+    <style>
+      .title { font: 600 20px 'Arial', sans-serif; fill: #2b2b2b; }
+      .label { font: 600 13px 'Arial', sans-serif; fill: #2b2b2b; }
+      .text { font: 12px 'Arial', sans-serif; fill: #4a4a4a; }
+      .pill { font: 600 11px 'Arial', sans-serif; fill: #2b2b2b; }
+      .muted { font: 11px 'Arial', sans-serif; fill: #7b7b7b; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="720" fill="url(#bg)" />
+  <rect x="40" y="40" width="1120" height="640" rx="22" fill="#ffffff" stroke="#e0d8cc" />
+
+  <text x="70" y="85" class="title">BOPS 对话演示（流式输出 / 步骤卡片 / 计划与文件卡片）</text>
+
+  <!-- User bubble -->
+  <rect x="720" y="120" width="400" height="70" rx="14" fill="#eef5ff" stroke="#cfe0ff" />
+  <text x="740" y="150" class="label">用户</text>
+  <text x="740" y="170" class="text">请生成一个部署 nginx 的工作流</text>
+
+  <!-- Thinking bubble -->
+  <rect x="80" y="210" width="520" height="80" rx="14" fill="#f0f4ff" stroke="#d6e2ff" />
+  <text x="100" y="240" class="label">思考过程</text>
+  <text x="100" y="260" class="text">正在解析需求、拆解步骤、构建计划...</text>
+
+  <!-- Function call panel -->
+  <rect x="80" y="310" width="520" height="160" rx="16" fill="url(#card)" stroke="#e6dfd3" />
+  <text x="100" y="340" class="label">步骤执行</text>
+  <rect x="100" y="360" width="110" height="22" rx="11" fill="#e8f1ff" stroke="#b8d1ff" />
+  <text x="112" y="375" class="pill">执行中</text>
+  <text x="230" y="375" class="text">生成工作流</text>
+  <rect x="100" y="395" width="110" height="22" rx="11" fill="#e8fff1" stroke="#bfe6cf" />
+  <text x="120" y="410" class="pill">完成</text>
+  <text x="230" y="410" class="text">校验工作流</text>
+
+  <!-- Card: workflow summary -->
+  <rect x="640" y="210" width="480" height="140" rx="16" fill="url(#card)" stroke="#e6dfd3" />
+  <text x="660" y="240" class="label">工作流概览</text>
+  <text x="660" y="265" class="text">steps=3 risk=low issues=0</text>
+  <text x="660" y="290" class="muted">步骤 3 · 风险 low · 问题 0</text>
+
+  <!-- Card: plan update -->
+  <rect x="640" y="370" width="480" height="160" rx="16" fill="url(#card)" stroke="#e6dfd3" />
+  <text x="660" y="400" class="label">更新计划</text>
+  <text x="660" y="425" class="text">解析需求 · 完成</text>
+  <text x="660" y="448" class="text">生成 YAML · 进行中</text>
+  <text x="660" y="471" class="text">校验输出 · 待处理</text>
+
+  <!-- Card: file create -->
+  <rect x="80" y="490" width="520" height="150" rx="16" fill="url(#card)" stroke="#e6dfd3" />
+  <text x="100" y="520" class="label">创建文件</text>
+  <text x="100" y="545" class="text">workflows/demo.yaml</text>
+  <text x="100" y="568" class="muted">version: v0.1  name: demo  steps: ...</text>
+</svg>

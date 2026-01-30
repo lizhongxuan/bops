@@ -7,12 +7,20 @@
       </div>
       <div class="actions">
         <RouterLink class="btn" :to="`/workflows/${workflowName}`">返回编排</RouterLink>
+        <button class="btn primary" type="button" :disabled="runBusy || nodes.length === 0" @click="startRun">
+          {{ runBusy ? "执行中..." : "执行" }}
+        </button>
         <div class="sync">
           <span class="dot" :class="isSynced ? 'ok' : 'warn'"></span>
           {{ isSynced ? "已同步" : "同步中..." }}
         </div>
+        <div v-if="runStatus" class="run-status" :class="runStatus">
+          {{ statusLabel(runStatus) }}
+        </div>
       </div>
     </div>
+    <div v-if="runMessage" class="run-message">{{ runMessage }}</div>
+    <div v-if="streamStatus" class="run-message warn">{{ streamStatus }}</div>
 
     <div class="flow-body">
       <div class="panel canvas">
@@ -25,7 +33,10 @@
             class="flow-node"
             v-for="(node, index) in nodes"
             :key="node.id"
-            :class="{ active: index === selectedIndex }"
+            :class="[
+              { active: index === selectedIndex },
+              nodeStatus(node)
+            ]"
             @click="selectNode(index)"
           >
             <div class="node-title">{{ node.name }}</div>
@@ -33,6 +44,9 @@
             <div class="node-targets" v-if="node.targets.length">
               目标: {{ node.targets.join(", ") }}
             </div>
+            <span v-if="nodeStatus(node)" class="node-status" :class="nodeStatus(node)">
+              {{ statusLabel(nodeStatus(node)) }}
+            </span>
           </div>
           <div v-if="nodes.length === 0" class="empty">
             暂无节点
@@ -101,13 +115,48 @@
         <div v-else class="empty">请选择一个节点进行编辑</div>
       </aside>
     </div>
+
+    <div v-if="showOutputModal" class="modal-backdrop" @click.self="closeOutputModal">
+      <div class="output-modal">
+        <div class="modal-head">
+          <div>
+            <div class="modal-title">{{ outputStepName || "步骤终端" }}</div>
+            <div class="modal-sub">
+              {{ outputStep ? statusLabel(outputStep.status) : "暂无执行状态" }}
+            </div>
+          </div>
+          <button class="icon-btn" type="button" @click="closeOutputModal">×</button>
+        </div>
+        <div class="terminal-window">
+          <div class="terminal-head">
+            <span class="dot red"></span>
+            <span class="dot yellow"></span>
+            <span class="dot green"></span>
+            <span class="title">{{ outputStepName || "未选择步骤" }}</span>
+          </div>
+          <div class="terminal-body">
+            <div v-if="!outputStep" class="line muted">暂无步骤输出</div>
+            <template v-else>
+              <div v-if="outputBlocks.length === 0" class="line muted">暂无输出</div>
+              <div v-for="block in outputBlocks" :key="block.host" class="output-block">
+                <div class="line muted"># {{ block.host }}</div>
+                <div v-if="block.stdout" class="line">{{ block.stdout }}</div>
+                <div v-if="block.stderr" class="line err">{{ block.stderr }}</div>
+                <div v-if="block.extra" class="line">{{ block.extra }}</div>
+                <div v-if="block.message" class="line err">{{ block.message }}</div>
+              </div>
+            </template>
+          </div>
+        </div>
+      </div>
+    </div>
   </section>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 import { useRoute } from "vue-router";
-import { ApiError, request } from "../lib/api";
+import { ApiError, apiBase, request } from "../lib/api";
 
 type Param = { key: string; value: string };
 
@@ -117,6 +166,55 @@ type FlowNode = {
   action: string;
   targets: string[];
   params: Param[];
+};
+
+type HostResult = {
+  host: string;
+  status: string;
+  started_at?: string;
+  finished_at?: string;
+  message?: string;
+  output?: Record<string, unknown>;
+};
+
+type StepState = {
+  name: string;
+  status: string;
+  started_at?: string;
+  finished_at?: string;
+  hosts?: Record<string, HostResult>;
+};
+
+type RunState = {
+  run_id: string;
+  workflow_name: string;
+  status: string;
+  message?: string;
+  started_at?: string;
+  finished_at?: string;
+  steps?: StepState[];
+};
+
+type RunResponse = {
+  run: RunState;
+  steps?: StepState[];
+};
+
+type EventPayload = {
+  type: string;
+  time: string;
+  run_id: string;
+  step?: string;
+  host?: string;
+  data?: Record<string, unknown>;
+};
+
+type OutputBlock = {
+  host: string;
+  stdout: string;
+  stderr: string;
+  extra: string;
+  message: string;
 };
 
 const route = useRoute();
@@ -131,10 +229,32 @@ const isSynced = ref(true);
 const loading = ref(false);
 const saving = ref(false);
 const runMessage = ref("");
+const runBusy = ref(false);
+const runId = ref("");
+const runStatus = ref("");
+const streamStatus = ref("");
+const runSteps = ref<StepState[]>([]);
+const outputStepName = ref("");
+const showOutputModal = ref(false);
 let skipNextSync = false;
+let stream: EventSource | null = null;
 
 const activeNode = computed(() => nodes[selectedIndex.value]);
 const targetsInput = ref(activeNode.value ? activeNode.value.targets.join(", ") : "");
+const outputStep = computed(() => runSteps.value.find((step) => step.name === outputStepName.value));
+const outputBlocks = computed<OutputBlock[]>(() => {
+  if (!outputStep.value || !outputStep.value.hosts) return [];
+  return Object.values(outputStep.value.hosts).map((host) => {
+    const { stdout, stderr, extra } = formatOutput(host.output);
+    return {
+      host: host.host,
+      stdout,
+      stderr,
+      extra,
+      message: host.message || ""
+    };
+  });
+});
 
 watch(
   () => nodes,
@@ -162,6 +282,9 @@ function selectNode(index: number) {
   const node = nodes[index];
   if (node) {
     targetsInput.value = node.targets.join(", ");
+    if (runId.value) {
+      openOutputModal(node.name);
+    }
   }
 }
 
@@ -205,6 +328,204 @@ async function syncYaml() {
 
 function centerFlow() {
   // Placeholder for future zoom/pan control.
+}
+
+function statusLabel(status: string) {
+  const map: Record<string, string> = {
+    success: "成功",
+    running: "执行中",
+    failed: "失败",
+    queued: "排队中",
+    pending: "待执行",
+    stopped: "已停止",
+    skipped: "已跳过"
+  };
+  return map[status] || status;
+}
+
+function nodeStatus(node: FlowNode) {
+  if (!runId.value) return "";
+  const step = runSteps.value.find((item) => item.name === node.name);
+  return step?.status || "queued";
+}
+
+function openOutputModal(stepName: string) {
+  outputStepName.value = stepName;
+  showOutputModal.value = true;
+}
+
+function closeOutputModal() {
+  showOutputModal.value = false;
+}
+
+function normalizeText(value: unknown) {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "string") return value.trimEnd();
+  return String(value);
+}
+
+function formatOutput(output?: Record<string, unknown>) {
+  if (!output) return { stdout: "", stderr: "", extra: "" };
+  const stdout = normalizeText(output.stdout);
+  const stderr = normalizeText(output.stderr);
+  const extraEntries = Object.entries(output).filter(
+    ([key]) => key !== "stdout" && key !== "stderr"
+  );
+  const extra = extraEntries.length
+    ? JSON.stringify(Object.fromEntries(extraEntries), null, 2)
+    : "";
+  return { stdout, stderr, extra };
+}
+
+function normalizeSteps(rawSteps: StepState[]) {
+  return rawSteps.map((step) => ({
+    ...step,
+    hosts: step.hosts || {}
+  }));
+}
+
+function ensureStep(name: string) {
+  let step = runSteps.value.find((item) => item.name === name);
+  if (!step) {
+    step = { name, status: "queued", hosts: {} };
+    runSteps.value.push(step);
+  }
+  if (!step.hosts) step.hosts = {};
+  return step;
+}
+
+function updateHost(step: StepState, hostName: string, patch: Partial<HostResult>) {
+  if (!step.hosts) step.hosts = {};
+  const prev = step.hosts[hostName] || { host: hostName, status: "queued" };
+  step.hosts[hostName] = { ...prev, ...patch, host: hostName };
+}
+
+function applyEvent(payload: EventPayload) {
+  if (!payload || payload.run_id !== runId.value) return;
+
+  switch (payload.type) {
+    case "workflow_start":
+      runStatus.value = String(payload.data?.status || "running");
+      break;
+    case "workflow_end":
+      runStatus.value = String(payload.data?.status || "success");
+      runMessage.value = String(payload.data?.message || "");
+      stopStream();
+      break;
+    case "step_start": {
+      if (!payload.step) break;
+      const step = ensureStep(payload.step);
+      step.status = "running";
+      step.started_at = payload.time;
+      const targets = Array.isArray(payload.data?.targets) ? payload.data?.targets : [];
+      for (const target of targets as Array<{ name?: string }>) {
+        if (target && target.name) {
+          updateHost(step, target.name, { status: "running", started_at: payload.time });
+        }
+      }
+      break;
+    }
+    case "step_end":
+    case "step_failed": {
+      if (!payload.step) break;
+      const step = ensureStep(payload.step);
+      step.status = String(payload.data?.status || (payload.type === "step_failed" ? "failed" : "success"));
+      step.finished_at = payload.time;
+      break;
+    }
+    case "agent_output": {
+      if (!payload.step || !payload.host) break;
+      const step = ensureStep(payload.step);
+      updateHost(step, payload.host, {
+        status: String(payload.data?.status || "success"),
+        output: payload.data?.output as Record<string, unknown>,
+        message: payload.data?.error ? String(payload.data?.error) : "",
+        finished_at: payload.time
+      });
+      break;
+    }
+    default:
+      break;
+  }
+}
+
+function startStream() {
+  stopStream();
+  if (!runId.value) return;
+  streamStatus.value = "";
+  const url = `${apiBase()}/runs/${runId.value}/stream`;
+  stream = new EventSource(url);
+  stream.onopen = () => {
+    streamStatus.value = "";
+  };
+  stream.onerror = () => {
+    streamStatus.value = "日志流连接中断，正在重试...";
+  };
+
+  const handler = (event: MessageEvent) => {
+    try {
+      const payload = JSON.parse(event.data) as EventPayload;
+      applyEvent(payload);
+    } catch {
+      // ignore malformed data
+    }
+  };
+
+  [
+    "workflow_start",
+    "workflow_end",
+    "step_start",
+    "step_end",
+    "step_failed",
+    "agent_output"
+  ].forEach((type) => {
+    if (!stream) return;
+    stream.addEventListener(type, handler as EventListener);
+  });
+}
+
+function stopStream() {
+  if (stream) {
+    stream.close();
+    stream = null;
+  }
+}
+
+async function loadRun() {
+  if (!runId.value) return;
+  try {
+    const data = await request<RunResponse>(`/runs/${runId.value}`);
+    runStatus.value = data.run.status || runStatus.value;
+    runMessage.value = data.run.message || runMessage.value;
+    const nextSteps =
+      data.run.steps && data.run.steps.length ? data.run.steps : data.steps || [];
+    runSteps.value = normalizeSteps(nextSteps);
+  } catch (err) {
+    runMessage.value = "运行加载失败，请检查服务是否启动";
+  }
+}
+
+async function startRun() {
+  if (runBusy.value) return;
+  runBusy.value = true;
+  runMessage.value = "执行中...";
+  try {
+    const data = await request<{ run_id: string }>(`/workflows/${workflowName.value}/apply`, {
+      method: "POST"
+    });
+    if (data.run_id) {
+      runId.value = data.run_id;
+      runStatus.value = "running";
+      runMessage.value = "执行已启动";
+      await loadRun();
+      startStream();
+    }
+  } catch (err) {
+    const apiErr = err as ApiError;
+    runMessage.value = apiErr.message ? `执行失败: ${apiErr.message}` : "执行失败";
+  } finally {
+    runBusy.value = false;
+  }
 }
 
 async function loadYaml() {
@@ -410,11 +731,28 @@ function replaceStepsBlock(content: string, steps: FlowNode[]) {
 }
 
 watch(workflowName, () => {
+  stopStream();
+  runId.value = "";
+  runStatus.value = "";
+  runSteps.value = [];
+  runMessage.value = "";
+  streamStatus.value = "";
   void loadYaml();
 });
 
 onMounted(() => {
   void loadYaml();
+});
+
+watch(runId, () => {
+  if (runId.value) {
+    void loadRun();
+    startStream();
+  }
+});
+
+onBeforeUnmount(() => {
+  stopStream();
 });
 
 function defaultYaml(name: string) {
@@ -528,6 +866,33 @@ steps:
   color: var(--muted);
 }
 
+.run-message.warn {
+  color: var(--warn);
+}
+
+.run-status {
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 12px;
+  border: 1px solid var(--grid);
+  color: var(--muted);
+}
+
+.run-status.running {
+  border-color: rgba(232, 93, 42, 0.4);
+  color: var(--brand);
+}
+
+.run-status.success {
+  border-color: rgba(42, 157, 75, 0.4);
+  color: var(--ok);
+}
+
+.run-status.failed {
+  border-color: rgba(226, 85, 85, 0.45);
+  color: #e25555;
+}
+
 .sync .dot {
   width: 8px;
   height: 8px;
@@ -620,6 +985,67 @@ steps:
   transform: translateX(4px);
 }
 
+.flow-node.running {
+  border-color: rgba(232, 93, 42, 0.5);
+  box-shadow: 0 0 0 2px rgba(232, 93, 42, 0.2);
+}
+
+.flow-node.running::before {
+  background: var(--brand);
+  box-shadow: 0 0 0 6px rgba(232, 93, 42, 0.18);
+}
+
+.flow-node.success {
+  border-color: rgba(42, 157, 75, 0.45);
+  box-shadow: 0 0 0 2px rgba(42, 157, 75, 0.16);
+}
+
+.flow-node.success::before {
+  background: var(--ok);
+  box-shadow: 0 0 0 6px rgba(42, 157, 75, 0.18);
+}
+
+.flow-node.failed {
+  border-color: rgba(226, 85, 85, 0.45);
+  box-shadow: 0 0 0 2px rgba(226, 85, 85, 0.16);
+}
+
+.flow-node.failed::before {
+  background: #e25555;
+  box-shadow: 0 0 0 6px rgba(226, 85, 85, 0.18);
+}
+
+.flow-node.queued {
+  border-style: dashed;
+}
+
+.node-status {
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--grid);
+  color: var(--muted);
+  background: #fff;
+}
+
+.node-status.running {
+  border-color: rgba(232, 93, 42, 0.4);
+  color: var(--brand);
+}
+
+.node-status.success {
+  border-color: rgba(42, 157, 75, 0.4);
+  color: var(--ok);
+}
+
+.node-status.failed {
+  border-color: rgba(226, 85, 85, 0.4);
+  color: #e25555;
+}
+
 .node-title {
   font-weight: 600;
 }
@@ -707,6 +1133,122 @@ steps:
 .empty {
   font-size: 12px;
   color: var(--muted);
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(14, 10, 6, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 40;
+  padding: 24px;
+}
+
+.output-modal {
+  background: #fff;
+  border-radius: 18px;
+  width: min(780px, 92vw);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 24px 60px rgba(15, 8, 4, 0.25);
+  border: 1px solid rgba(27, 27, 27, 0.1);
+}
+
+.modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 18px;
+  border-bottom: 1px solid var(--grid);
+}
+
+.modal-title {
+  font-weight: 600;
+}
+
+.modal-sub {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.icon-btn {
+  border: none;
+  background: transparent;
+  font-size: 18px;
+  cursor: pointer;
+  color: var(--muted);
+}
+
+.terminal-window {
+  display: flex;
+  flex-direction: column;
+  background: #101010;
+  color: #f0f0f0;
+  margin: 16px;
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.terminal-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 12px;
+  background: #1a1a1a;
+  font-size: 12px;
+}
+
+.terminal-head .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.terminal-head .dot.red {
+  background: #ff5f57;
+}
+
+.terminal-head .dot.yellow {
+  background: #febc2e;
+}
+
+.terminal-head .dot.green {
+  background: #28c840;
+}
+
+.terminal-head .title {
+  margin-left: 8px;
+  color: #c9c9c9;
+}
+
+.terminal-body {
+  padding: 12px 14px;
+  font-family: "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  overflow: auto;
+  max-height: 60vh;
+  white-space: pre-wrap;
+}
+
+.terminal-body .line {
+  margin-bottom: 6px;
+}
+
+.terminal-body .line.muted {
+  color: rgba(240, 240, 240, 0.5);
+}
+
+.terminal-body .line.err {
+  color: #ff9087;
+}
+
+.output-block {
+  margin-bottom: 12px;
 }
 
 @media (max-width: 1100px) {

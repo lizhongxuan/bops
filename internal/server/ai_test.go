@@ -4,12 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"bops/internal/ai"
+	"bops/internal/aiworkflow"
 	"bops/internal/aistore"
 	"bops/internal/envstore"
 	"bops/internal/workflowstore"
@@ -24,6 +27,66 @@ func (s *stubAI) Chat(ctx context.Context, messages []ai.Message) (string, error
 	s.last = messages
 	return s.reply, nil
 }
+
+type stubSequence struct {
+	responses []string
+	idx       int
+	last      []ai.Message
+}
+
+func (s *stubSequence) Chat(_ context.Context, messages []ai.Message) (string, error) {
+	if s.idx >= len(s.responses) {
+		return "", errors.New("no response configured")
+	}
+	s.last = messages
+	s.idx++
+	return s.responses[s.idx-1], nil
+}
+
+type streamAI struct {
+	intentJSON   string
+	workflowJSON string
+	thought      string
+}
+
+func (s *streamAI) Chat(_ context.Context, _ []ai.Message) (string, error) {
+	return s.intentJSON, nil
+}
+
+func (s *streamAI) ChatStream(_ context.Context, _ []ai.Message, onDelta func(ai.StreamDelta)) (string, string, error) {
+	if onDelta != nil {
+		onDelta(ai.StreamDelta{Thought: s.thought})
+		onDelta(ai.StreamDelta{Content: s.workflowJSON})
+	}
+	return s.workflowJSON, s.thought, nil
+}
+
+type streamRecorder struct {
+	header http.Header
+	body   bytes.Buffer
+	status int
+}
+
+func newStreamRecorder() *streamRecorder {
+	return &streamRecorder{header: make(http.Header)}
+}
+
+func (r *streamRecorder) Header() http.Header {
+	return r.header
+}
+
+func (r *streamRecorder) Write(data []byte) (int, error) {
+	if r.status == 0 {
+		r.status = http.StatusOK
+	}
+	return r.body.Write(data)
+}
+
+func (r *streamRecorder) WriteHeader(statusCode int) {
+	r.status = statusCode
+}
+
+func (r *streamRecorder) Flush() {}
 
 func newTestServer(t *testing.T) *Server {
 	t.Helper()
@@ -45,10 +108,21 @@ func newTestServer(t *testing.T) *Server {
 
 func TestAIWorkflowGenerate(t *testing.T) {
 	srv := newTestServer(t)
-	stub := &stubAI{reply: "```yaml\nversion: v0.1\nname: demo\nsteps:\n  - name: ok\n    action: cmd.run\n    with:\n      cmd: \"echo hi\"\n```"}
+	intentJSON := `{"goal":"install nginx","missing":[]}`
+	workflowJSON := `{"workflow":{"version":"v0.1","name":"demo","steps":[{"name":"ok","action":"cmd.run","targets":["local"],"with":{"cmd":"echo hi"}}]}}`
+	stub := &stubSequence{responses: []string{intentJSON, workflowJSON}}
 	srv.aiClient = stub
+	workflow, err := aiworkflow.New(aiworkflow.Config{
+		Client:       stub,
+		SystemPrompt: srv.aiPrompt,
+		MaxRetries:   2,
+	})
+	if err != nil {
+		t.Fatalf("init ai workflow: %v", err)
+	}
+	srv.aiWorkflow = workflow
 
-	body := bytes.NewBufferString(`{"prompt":"hello"}`)
+	body := bytes.NewBufferString(`{"prompt":"install nginx"}`)
 	req := httptest.NewRequest(http.MethodPost, "/api/ai/workflow/generate", body)
 	w := httptest.NewRecorder()
 
@@ -72,8 +146,8 @@ func TestAIWorkflowGenerate(t *testing.T) {
 	if stub.last[0].Role != "system" {
 		t.Fatalf("expected system prompt to be included")
 	}
-	if stub.last[len(stub.last)-1].Content != "hello" {
-		t.Fatalf("expected user prompt to be last message")
+	if !strings.Contains(stub.last[len(stub.last)-1].Content, "install nginx") {
+		t.Fatalf("expected user prompt to be included in last message")
 	}
 }
 
@@ -126,5 +200,115 @@ func TestAIChatSessionFlow(t *testing.T) {
 			replyText = msgResp.Reply.Content
 		}
 		t.Fatalf("unexpected reply: %s", replyText)
+	}
+}
+
+func TestBuildStreamMessageFromEvent(t *testing.T) {
+	startEvt := aiworkflow.Event{
+		Node:        "generator",
+		Status:      "start",
+		DisplayName: "生成工作流",
+		Message:     "begin",
+	}
+	msg, ok := buildStreamMessageFromEvent(startEvt, "reply-1", 1)
+	if !ok {
+		t.Fatalf("expected message to be built")
+	}
+	if msg.Type != "function_call" || msg.IsFinish {
+		t.Fatalf("expected function_call not finished, got type=%s finish=%v", msg.Type, msg.IsFinish)
+	}
+	if msg.ExtraInfo.CallID != "generator" {
+		t.Fatalf("expected call_id generator, got %s", msg.ExtraInfo.CallID)
+	}
+	if msg.ExtraInfo.ExecuteDisplayName == "" {
+		t.Fatalf("expected execute_display_name to be set")
+	}
+	var names map[string]string
+	if err := json.Unmarshal([]byte(msg.ExtraInfo.ExecuteDisplayName), &names); err != nil {
+		t.Fatalf("decode execute_display_name: %v", err)
+	}
+	if names["name_executing"] == "" || names["name_executed"] == "" || names["name_execute_failed"] == "" {
+		t.Fatalf("expected execute_display_name fields to be populated")
+	}
+
+	errorEvt := aiworkflow.Event{
+		Node:   "validator",
+		Status: "error",
+	}
+	errorMsg, ok := buildStreamMessageFromEvent(errorEvt, "reply-1", 2)
+	if !ok {
+		t.Fatalf("expected error message to be built")
+	}
+	if errorMsg.Type != "tool_response" || !errorMsg.IsFinish {
+		t.Fatalf("expected tool_response finished, got type=%s finish=%v", errorMsg.Type, errorMsg.IsFinish)
+	}
+	if errorMsg.ExtraInfo.PluginStatus != "1" {
+		t.Fatalf("expected plugin_status 1, got %s", errorMsg.ExtraInfo.PluginStatus)
+	}
+}
+
+func TestAIWorkflowStreamSSEOrder(t *testing.T) {
+	srv := newTestServer(t)
+	intentJSON := `{"goal":"install nginx","missing":[]}`
+	workflowJSON := `{"workflow":{"version":"v0.1","name":"demo","steps":[{"name":"ok","action":"cmd.run","targets":["local"],"with":{"cmd":"echo hi"}}]}}`
+	streamClient := &streamAI{
+		intentJSON:   intentJSON,
+		workflowJSON: workflowJSON,
+		thought:      "thinking...",
+	}
+	workflow, err := aiworkflow.New(aiworkflow.Config{
+		Client:       streamClient,
+		SystemPrompt: srv.aiPrompt,
+		MaxRetries:   1,
+	})
+	if err != nil {
+		t.Fatalf("init ai workflow: %v", err)
+	}
+	srv.aiWorkflow = workflow
+
+	body := bytes.NewBufferString(`{"prompt":"install nginx"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/workflow/stream", body)
+	rec := newStreamRecorder()
+
+	srv.handleAIWorkflowStream(rec, req)
+	if rec.status != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.status)
+	}
+	output := rec.body.String()
+	if !strings.Contains(output, "event: delta") {
+		t.Fatalf("expected delta event in stream")
+	}
+	if !strings.Contains(output, "\"channel\":\"answer\"") {
+		t.Fatalf("expected answer delta channel in stream")
+	}
+	if !strings.Contains(output, "\"channel\":\"thought\"") {
+		t.Fatalf("expected thought delta channel in stream")
+	}
+	if !strings.Contains(output, "event: status") {
+		t.Fatalf("expected status event in stream")
+	}
+	if !strings.Contains(output, "event: message") {
+		t.Fatalf("expected message event in stream")
+	}
+	if !strings.Contains(output, "\"type\":\"function_call\"") {
+		t.Fatalf("expected function_call message in stream")
+	}
+	if !strings.Contains(output, "\"type\":\"tool_response\"") {
+		t.Fatalf("expected tool_response message in stream")
+	}
+	if !strings.Contains(output, "\"card_type\":\"create_step\"") {
+		t.Fatalf("expected create_step card in stream")
+	}
+	if !strings.Contains(output, "\"card_type\":\"file_create\"") {
+		t.Fatalf("expected file_create card in stream")
+	}
+	if !strings.Contains(output, "event: result") {
+		t.Fatalf("expected result event in stream")
+	}
+	if strings.Index(output, "event: delta") > strings.Index(output, "event: result") {
+		t.Fatalf("expected delta to appear before result")
+	}
+	if strings.Index(output, "event: status") > strings.Index(output, "event: result") {
+		t.Fatalf("expected status to appear before result")
 	}
 }
