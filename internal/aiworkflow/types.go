@@ -82,7 +82,8 @@ type Event struct {
 	CallID      string `json:"call_id,omitempty"`
 	DisplayName string `json:"display_name,omitempty"`
 	Stage       string `json:"stage,omitempty"`
-	Data        map[string]any `json:"data,omitempty"`
+	StreamPluginRunning string         `json:"stream_plugin_running,omitempty"`
+	Data                map[string]any `json:"data,omitempty"`
 }
 
 type EventSink func(Event)

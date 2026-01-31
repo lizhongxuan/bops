@@ -192,6 +192,60 @@ func splitThoughtFromContent(content string) (string, string) {
 	return cleaned, thought
 }
 
+type thoughtStreamParser struct {
+	inThink bool
+	buffer  string
+}
+
+func splitPartialTag(data, tag string) (string, string) {
+	max := len(tag) - 1
+	if len(data) < max {
+		max = len(data)
+	}
+	for i := max; i > 0; i-- {
+		if strings.HasSuffix(data, tag[:i]) {
+			return data[:len(data)-i], data[len(data)-i:]
+		}
+	}
+	return data, ""
+}
+
+func (p *thoughtStreamParser) Parse(input string) (string, string) {
+	if input == "" {
+		return "", ""
+	}
+	data := p.buffer + input
+	p.buffer = ""
+	var contentBuilder strings.Builder
+	var thoughtBuilder strings.Builder
+	for len(data) > 0 {
+		if p.inThink {
+			idx := strings.Index(data, "</think>")
+			if idx == -1 {
+				stable, remainder := splitPartialTag(data, "</think>")
+				thoughtBuilder.WriteString(stable)
+				p.buffer = remainder
+				break
+			}
+			thoughtBuilder.WriteString(data[:idx])
+			data = data[idx+len("</think>"):]
+			p.inThink = false
+			continue
+		}
+		idx := strings.Index(data, "<think>")
+		if idx == -1 {
+			stable, remainder := splitPartialTag(data, "<think>")
+			contentBuilder.WriteString(stable)
+			p.buffer = remainder
+			break
+		}
+		contentBuilder.WriteString(data[:idx])
+		data = data[idx+len("<think>"):]
+		p.inThink = true
+	}
+	return contentBuilder.String(), thoughtBuilder.String()
+}
+
 // ChatStream 支持流式对话
 // onDelta 会在每次收到内容或思考片段时被调用
 func (c *openAIClient) ChatStream(ctx context.Context, messages []Message, onDelta func(StreamDelta)) (string, string, error) {
@@ -244,6 +298,7 @@ func (c *openAIClient) ChatStream(ctx context.Context, messages []Message, onDel
 	reader := bufio.NewReader(resp.Body)
 	var contentBuilder strings.Builder
 	var thoughtBuilder strings.Builder
+	var streamParser thoughtStreamParser
 	for {
 		// 读取一行 (以 \n 结尾)
 		line, err := reader.ReadBytes('\n')
@@ -279,23 +334,40 @@ func (c *openAIClient) ChatStream(ctx context.Context, messages []Message, onDel
 
 		if len(chunk.Choices) > 0 {
 			delta := chunk.Choices[0].Delta
+			if delta.Content == "" && delta.ReasoningContent == "" {
+				continue
+			}
 
-			// 如果有内容，调用回调函数传出去
-			if delta.Content != "" || delta.ReasoningContent != "" {
-				if delta.Content != "" {
-					contentBuilder.WriteString(delta.Content)
-				}
-				if delta.ReasoningContent != "" {
-					thoughtBuilder.WriteString(delta.ReasoningContent)
-				}
-				if onDelta != nil {
-					onDelta(StreamDelta{Content: delta.Content, Thought: delta.ReasoningContent})
-				}
+			contentChunk := ""
+			thoughtChunk := ""
+			if delta.ReasoningContent != "" {
+				contentChunk = delta.Content
+				thoughtChunk = delta.ReasoningContent
+			} else {
+				contentChunk, thoughtChunk = streamParser.Parse(delta.Content)
+			}
+
+			if contentChunk != "" {
+				contentBuilder.WriteString(contentChunk)
+			}
+			if thoughtChunk != "" {
+				thoughtBuilder.WriteString(thoughtChunk)
+			}
+			if onDelta != nil && (contentChunk != "" || thoughtChunk != "") {
+				onDelta(StreamDelta{Content: contentChunk, Thought: thoughtChunk})
 			}
 		}
 	}
 
 	content := strings.TrimSpace(contentBuilder.String())
+	if streamParser.buffer != "" {
+		if streamParser.inThink {
+			thoughtBuilder.WriteString(streamParser.buffer)
+		} else {
+			contentBuilder.WriteString(streamParser.buffer)
+		}
+	}
+	content = strings.TrimSpace(contentBuilder.String())
 	thought := strings.TrimSpace(thoughtBuilder.String())
 	if thought == "" {
 		content, thought = splitThoughtFromContent(content)

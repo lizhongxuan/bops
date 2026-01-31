@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"reflect"
 	"strings"
 	"time"
 
@@ -113,8 +112,6 @@ type aiStreamRequest struct {
 
 const (
 	cardTypeFileCreate = "file_create"
-	cardTypeCreateStep = "create_step"
-	cardTypeUpdateStep = "update_step"
 )
 
 type streamMessage struct {
@@ -134,6 +131,7 @@ type streamMessageExt struct {
 	ExecuteDisplayName string `json:"execute_display_name,omitempty"`
 	PluginStatus       string `json:"plugin_status,omitempty"`
 	MessageTitle       string `json:"message_title,omitempty"`
+	StreamPluginRunning string `json:"stream_plugin_running,omitempty"`
 }
 
 func (s *Server) handleAIChatSessions(w http.ResponseWriter, r *http.Request) {
@@ -649,25 +647,35 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 	}()
 
 	var pending *streamResult
-	sentThoughtDelta := false
+	sentReasoningDelta := false
 
 	for {
 		select {
 		case evt, ok := <-events:
 			if ok {
 				writeSSE(w, "status", evt)
-				if msg, ok := buildStreamMessageFromEvent(evt, replyID, eventIndex); ok {
-					writeSSE(w, "message", msg)
-					eventIndex++
+				if evt.Status == "stream_finish" || evt.Status == "stream_done" {
+					streamUUID := streamPluginRunningValue(evt)
+					if streamUUID == "" {
+						if msg, ok := buildStreamMessageFromEvent(evt, replyID, eventIndex); ok {
+							writeSSE(w, "message", msg)
+							eventIndex++
+						}
+					}
+					if verboseMsg, ok := buildStreamPluginFinishVerbose(evt, replyID, eventIndex); ok {
+						writeSSE(w, "message", verboseMsg)
+						eventIndex++
+					}
+				} else {
+					if msg, ok := buildStreamMessageFromEvent(evt, replyID, eventIndex); ok {
+						writeSSE(w, "message", msg)
+						eventIndex++
+					}
 				}
 				if evt.Node == "generator" && evt.Status == "done" {
 					if yamlText, ok := evt.Data["yaml"].(string); ok {
 						trimmedYAML := strings.TrimSpace(yamlText)
 						if trimmedYAML != "" {
-							for _, card := range buildCreateStepCards(trimmedYAML, replyID) {
-								writeSSE(w, "card", card)
-								flusher.Flush()
-							}
 							writeSSE(w, "card", map[string]any{
 								"card_id":   "file-create",
 								"reply_id":  replyID,
@@ -689,11 +697,6 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 					if yamlText, ok := evt.Data["yaml"].(string); ok {
 						trimmedYAML := strings.TrimSpace(yamlText)
 						if trimmedYAML != "" {
-							prevYAML, _ := evt.Data["prev_yaml"].(string)
-							for _, card := range buildUpdateStepCards(prevYAML, trimmedYAML, replyID) {
-								writeSSE(w, "card", card)
-								flusher.Flush()
-							}
 							writeSSE(w, "card", map[string]any{
 								"card_id":   "file-create",
 								"reply_id":  replyID,
@@ -719,9 +722,9 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 			if ok {
 				wrote := false
 				if delta.Thought != "" {
-					sentThoughtDelta = true
+					sentReasoningDelta = true
 					writeSSE(w, "delta", map[string]any{
-						"channel": "thought",
+						"channel": "reasoning",
 						"content": delta.Thought,
 					})
 					wrote = true
@@ -752,8 +755,8 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 		}
 
 		if pending != nil && events == nil && streamCh == nil {
-			if pending.state != nil && !sentThoughtDelta {
-				streamThought(w, flusher, pending.state.Thought)
+			if pending.state != nil && !sentReasoningDelta {
+				streamReasoning(w, flusher, pending.state.Thought)
 			}
 			if pending.state != nil && pending.state.ExecutionResult != nil && !pending.state.ExecutionSkipped {
 				execResult := pending.state.ExecutionResult
@@ -870,10 +873,25 @@ func buildStreamMessageFromEvent(evt aiworkflow.Event, replyID string, index int
 	if evt.Status == "start" {
 		msgType = "function_call"
 		isFinish = false
+	} else if evt.Status == "stream" {
+		msgType = "tool_response"
+		isFinish = false
+	} else if evt.Status == "stream_finish" || evt.Status == "stream_done" {
+		msgType = "tool_response"
+		isFinish = true
 	}
 	pluginStatus := "0"
 	if evt.Status == "error" {
 		pluginStatus = "1"
+	}
+	streamPluginRunning := streamPluginRunningValue(evt)
+	messageContent := evt.Message
+	if strings.TrimSpace(messageContent) == "" && evt.Data != nil {
+		if value, ok := evt.Data["tool_output_content"].(string); ok {
+			messageContent = value
+		} else if value, ok := evt.Data["content"].(string); ok {
+			messageContent = value
+		}
 	}
 	messageID := fmt.Sprintf("%s-%s-%d", callID, evt.Status, index)
 	return streamMessage{
@@ -881,109 +899,72 @@ func buildStreamMessageFromEvent(evt aiworkflow.Event, replyID string, index int
 		ReplyID:   replyID,
 		Role:      "assistant",
 		Type:      msgType,
-		Content:   evt.Message,
+		Content:   messageContent,
 		IsFinish:  isFinish,
 		Index:     index,
 		ExtraInfo: streamMessageExt{
 			CallID:             callID,
 			ExecuteDisplayName: buildExecuteDisplayName(displayName),
 			PluginStatus:       pluginStatus,
+			StreamPluginRunning: streamPluginRunning,
 		},
 	}, true
 }
 
-func buildCreateStepCards(yamlText, replyID string) []map[string]any {
-	trimmed := strings.TrimSpace(yamlText)
-	if trimmed == "" {
-		return nil
+func buildStreamPluginFinishVerbose(evt aiworkflow.Event, replyID string, index int) (streamMessage, bool) {
+	streamUUID := streamPluginRunningValue(evt)
+	if streamUUID == "" {
+		return streamMessage{}, false
 	}
-	wf, err := workflow.Load([]byte(trimmed))
-	if err != nil {
-		return nil
-	}
-	cards := make([]map[string]any, 0, len(wf.Steps))
-	for i, step := range wf.Steps {
-		cards = append(cards, map[string]any{
-			"card_id":    fmt.Sprintf("step-create-%d", i),
-			"reply_id":   replyID,
-			"card_type":  cardTypeCreateStep,
-			"title":      "创建步骤",
-			"step_index": i,
-			"step":       stepPayload(step),
-		})
-	}
-	return cards
-}
-
-func buildUpdateStepCards(prevYAML, yamlText, replyID string) []map[string]any {
-	trimmed := strings.TrimSpace(yamlText)
-	if trimmed == "" {
-		return nil
-	}
-	wf, err := workflow.Load([]byte(trimmed))
-	if err != nil {
-		return nil
-	}
-	prevTrimmed := strings.TrimSpace(prevYAML)
-	if prevTrimmed == "" {
-		return buildCreateStepCards(trimmed, replyID)
-	}
-	prevWf, err := workflow.Load([]byte(prevTrimmed))
-	if err != nil {
-		return buildCreateStepCards(trimmed, replyID)
-	}
-	prevMap := map[string]workflow.Step{}
-	for i, step := range prevWf.Steps {
-		prevMap[stepKey(step, i)] = step
-	}
-	cards := make([]map[string]any, 0, len(wf.Steps))
-	for i, step := range wf.Steps {
-		key := stepKey(step, i)
-		if prevStep, ok := prevMap[key]; ok {
-			if reflect.DeepEqual(prevStep, step) {
-				continue
-			}
-			cards = append(cards, map[string]any{
-				"card_id":    fmt.Sprintf("step-update-%d", i),
-				"reply_id":   replyID,
-				"card_type":  cardTypeUpdateStep,
-				"title":      "修改步骤",
-				"step_index": i,
-				"before":     stepPayload(prevStep),
-				"after":      stepPayload(step),
-			})
-			continue
+	toolOutput := ""
+	if evt.Data != nil {
+		if value, ok := evt.Data["tool_output_content"].(string); ok {
+			toolOutput = value
+		} else if value, ok := evt.Data["content"].(string); ok {
+			toolOutput = value
 		}
-		cards = append(cards, map[string]any{
-			"card_id":    fmt.Sprintf("step-create-%d", i),
-			"reply_id":   replyID,
-			"card_type":  cardTypeCreateStep,
-			"title":      "创建步骤",
-			"step_index": i,
-			"step":       stepPayload(step),
-		})
 	}
-	return cards
+	dataPayload := map[string]string{
+		"uuid":                streamUUID,
+		"tool_output_content": toolOutput,
+	}
+	dataBytes, _ := json.Marshal(dataPayload)
+	contentPayload := map[string]string{
+		"msg_type": "stream_plugin_finish",
+		"data":     string(dataBytes),
+	}
+	contentBytes, _ := json.Marshal(contentPayload)
+	callID := strings.TrimSpace(evt.CallID)
+	if callID == "" {
+		callID = evt.Node
+	}
+	return streamMessage{
+		MessageID: fmt.Sprintf("%s-verbose-%d", callID, index),
+		ReplyID:   replyID,
+		Role:      "assistant",
+		Type:      "verbose",
+		Content:   string(contentBytes),
+		IsFinish:  true,
+		Index:     index,
+		ExtraInfo: streamMessageExt{
+			CallID:             callID,
+			ExecuteDisplayName: buildExecuteDisplayName(strings.TrimSpace(evt.DisplayName)),
+			PluginStatus:       "0",
+			StreamPluginRunning: streamUUID,
+		},
+	}, true
 }
 
-func stepKey(step workflow.Step, index int) string {
-	name := strings.TrimSpace(step.Name)
-	if name == "" {
-		return fmt.Sprintf("index-%d", index)
+func streamPluginRunningValue(evt aiworkflow.Event) string {
+	streamPluginRunning := strings.TrimSpace(evt.StreamPluginRunning)
+	if streamPluginRunning == "" && evt.Data != nil {
+		if value, ok := evt.Data["stream_plugin_running"].(string); ok {
+			streamPluginRunning = strings.TrimSpace(value)
+		} else if value, ok := evt.Data["stream_uuid"].(string); ok {
+			streamPluginRunning = strings.TrimSpace(value)
+		}
 	}
-	return name
-}
-
-func stepPayload(step workflow.Step) map[string]any {
-	payload := map[string]any{
-		"name":    step.Name,
-		"action":  step.Action,
-		"targets": step.Targets,
-	}
-	if len(step.With) > 0 {
-		payload["with"] = step.With
-	}
-	return payload
+	return streamPluginRunning
 }
 
 func writeSSE(w http.ResponseWriter, event string, payload any) {
@@ -997,14 +978,14 @@ func writeSSE(w http.ResponseWriter, event string, payload any) {
 	_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 }
 
-func streamThought(w http.ResponseWriter, flusher http.Flusher, thought string) {
+func streamReasoning(w http.ResponseWriter, flusher http.Flusher, thought string) {
 	trimmed := strings.TrimSpace(thought)
 	if trimmed == "" {
 		return
 	}
 	for _, chunk := range chunkRunes(trimmed, 12) {
 		writeSSE(w, "delta", map[string]any{
-			"channel": "thought",
+			"channel": "reasoning",
 			"content": chunk,
 		})
 		flusher.Flush()

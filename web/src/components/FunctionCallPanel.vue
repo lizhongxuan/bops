@@ -4,10 +4,11 @@
     <details v-for="item in items" :key="item.callId" class="function-item" :open="item.status === 'running'">
       <summary class="function-summary">
         <span class="status" :class="item.status">{{ statusLabel(item.status) }}</span>
+        <span v-if="item.streamUuid && item.status === 'running'" class="stream-tag">流式中</span>
         <span class="title">{{ item.title }}</span>
       </summary>
       <div v-if="item.content" class="function-body">
-        <pre>{{ item.content }}</pre>
+        <pre>{{ formatContent(item.content) }}</pre>
       </div>
     </details>
   </div>
@@ -20,6 +21,7 @@ export type FunctionCallUnit = {
   status: "running" | "done" | "failed";
   content?: string;
   index?: number;
+  streamUuid?: string;
 };
 
 defineProps<{ items: FunctionCallUnit[] }>();
@@ -28,6 +30,18 @@ function statusLabel(status: FunctionCallUnit["status"]) {
   if (status === "running") return "执行中";
   if (status === "failed") return "失败";
   return "完成";
+}
+
+function formatContent(content?: string) {
+  if (!content) return "";
+  const trimmed = content.trim();
+  if (!trimmed) return content;
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return content;
+  }
 }
 </script>
 
@@ -86,6 +100,15 @@ function statusLabel(status: FunctionCallUnit["status"]) {
   color: #c2352b;
   border-color: rgba(194, 53, 43, 0.25);
   background: rgba(194, 53, 43, 0.08);
+}
+
+.stream-tag {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(122, 92, 54, 0.25);
+  background: rgba(122, 92, 54, 0.08);
+  color: #7a5c36;
 }
 
 .title {

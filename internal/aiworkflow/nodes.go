@@ -276,14 +276,21 @@ func emitEventWithData(state *State, node, status, message string, data map[stri
 		return
 	}
 	displayName := mapNodeDisplayName(node)
+	streamPluginRunning := ""
+	if data != nil {
+		if value, ok := data["stream_plugin_running"].(string); ok {
+			streamPluginRunning = value
+		}
+	}
 	state.EventSink(Event{
-		Node:        node,
-		Status:      status,
-		Message:     message,
-		CallID:      node,
-		DisplayName: displayName,
-		Stage:       status,
-		Data:        data,
+		Node:                node,
+		Status:              status,
+		Message:             message,
+		CallID:              node,
+		DisplayName:         displayName,
+		Stage:               status,
+		StreamPluginRunning: streamPluginRunning,
+		Data:                data,
 	})
 }
 

@@ -19,13 +19,7 @@
                 <span class="timeline-badge" :class="entry.type">{{ entry.label }}</span>
                 <small v-if="entry.extra">{{ entry.extra }}</small>
               </div>
-              <div v-if="entry.type === 'thinking'" class="thinking-content">
-                <details class="thinking-toggle">
-                  <summary>思考过程</summary>
-                  <p v-if="entry.body">{{ entry.body }}</p>
-                </details>
-              </div>
-              <div v-else-if="entry.type === 'function_call'" class="function-call-card">
+              <div v-if="entry.type === 'function_call'" class="function-call-card">
                 <FunctionCallPanel :items="entry.functionCalls || []" />
               </div>
               <div v-else-if="entry.type === 'card'" class="card-entry">
@@ -57,7 +51,15 @@
                   <div v-else class="ui-resource-fallback">UI resource unavailable.</div>
                 </div>
               </div>
-              <p v-else-if="entry.body">{{ entry.body }}</p>
+              <div v-else class="text-entry">
+                <div v-if="entry.type === 'ai' && entry.reasoning" class="reasoning-content">
+                  <details class="reasoning-toggle">
+                    <summary>思考过程</summary>
+                    <p v-if="entry.reasoning">{{ entry.reasoning }}</p>
+                  </details>
+                </div>
+                <p v-if="entry.body">{{ entry.body }}</p>
+              </div>
               <div v-if="entry.actionLabel" class="timeline-actions">
                 <button class="btn ghost btn-sm" type="button" @click="handleEntryAction(entry.action)">
                   {{ entry.actionLabel }}
@@ -690,6 +692,7 @@ type ChatEntry = {
   resource?: UIResourceBody | null;
   functionCalls?: FunctionCallUnit[];
   card?: CardPayload;
+  reasoning?: string;
 };
 
 type StreamMessage = {
@@ -705,6 +708,7 @@ type StreamMessage = {
     execute_display_name?: string;
     plugin_status?: string;
     message_title?: string;
+    stream_plugin_running?: string;
   };
 };
 
@@ -801,14 +805,14 @@ const chatBodyRef = ref<HTMLElement | null>(null);
 const stepsListRef = ref<HTMLElement | null>(null);
 const chatAutoScroll = ref(true);
 const mcpUiReady = ref(false);
-const liveThoughtEntryId = ref<string | null>(null);
-const liveThoughtText = ref("");
+const liveReasoningText = ref("");
 const liveAnswerEntryId = ref<string | null>(null);
 const hasStreamDelta = ref(false);
 const streamResultReceived = ref(false);
 let liveAnswerTimer: number | null = null;
 const activeNodes = ref<string[]>([]);
 const functionCallEntryIds = ref<Record<string, string>>({});
+const functionCallStreamEntryIds = ref<Record<string, string>>({});
 const chatSessions = ref<ChatSessionSummary[]>([]);
 const chatSessionId = ref("");
 const chatSessionTitle = ref("");
@@ -1037,7 +1041,7 @@ watch([yaml, visualYaml, autoSync, draftId], () => {
 
 watch(aiDisplayName, (next) => {
   chatEntries.value = chatEntries.value.map((entry) => {
-    if (entry.type !== "ai" && entry.type !== "thinking") return entry;
+    if (entry.type !== "ai") return entry;
     return { ...entry, label: next };
   });
 });
@@ -1161,13 +1165,13 @@ function resetStreamState() {
     window.clearInterval(liveAnswerTimer);
     liveAnswerTimer = null;
   }
-  liveThoughtEntryId.value = null;
-  liveThoughtText.value = "";
+  liveReasoningText.value = "";
   liveAnswerEntryId.value = null;
   hasStreamDelta.value = false;
   streamResultReceived.value = false;
   activeNodes.value = [];
   functionCallEntryIds.value = {};
+  functionCallStreamEntryIds.value = {};
   refreshActiveStatus();
 }
 
@@ -1193,19 +1197,22 @@ function handleFunctionCallMessage(msg: StreamMessage) {
     currentReplyId.value = msg.reply_id;
   }
   const callId = msg.extra_info?.call_id || msg.message_id || `call-${Date.now()}`;
-  const isRunning = msg.type === "function_call";
+  const isFinish = typeof msg.is_finish === "boolean" ? msg.is_finish : msg.type !== "function_call";
+  const isRunning = msg.type === "function_call" || (msg.type === "tool_response" && !isFinish);
   const failed = msg.extra_info?.plugin_status === "1";
   const status: FunctionCallUnit["status"] = isRunning ? "running" : failed ? "failed" : "done";
   const phase = isRunning ? "executing" : failed ? "failed" : "executed";
   const namedTitle = parseExecuteDisplayName(msg.extra_info?.execute_display_name, phase);
   const title = namedTitle || msg.content || callId;
   const index = typeof msg.index === "number" ? msg.index : undefined;
+  const streamUuid = msg.extra_info?.stream_plugin_running || "";
   const nextUnit: FunctionCallUnit = {
     callId,
     title,
     status,
     content: msg.content,
-    index
+    index,
+    streamUuid: streamUuid || undefined
   };
   const replyId = msg.reply_id || currentReplyId.value || "";
   const entryId = functionCallEntryIds.value[callId];
@@ -1216,6 +1223,9 @@ function handleFunctionCallMessage(msg: StreamMessage) {
       functionCalls: [nextUnit],
       body: ""
     }));
+    if (streamUuid) {
+      functionCallStreamEntryIds.value = { ...functionCallStreamEntryIds.value, [streamUuid]: entryId };
+    }
     return;
   }
   const newId = pushChatEntry({
@@ -1227,6 +1237,50 @@ function handleFunctionCallMessage(msg: StreamMessage) {
     functionCalls: [nextUnit]
   });
   functionCallEntryIds.value = { ...functionCallEntryIds.value, [callId]: newId };
+  if (streamUuid) {
+    functionCallStreamEntryIds.value = { ...functionCallStreamEntryIds.value, [streamUuid]: newId };
+  }
+}
+
+function handleVerboseMessage(msg: StreamMessage) {
+  if (msg.type !== "verbose") return;
+  if (!msg.content) return;
+  let parsed: { msg_type?: string; data?: string } | null = null;
+  try {
+    parsed = JSON.parse(msg.content);
+  } catch {
+    return;
+  }
+  if (!parsed || typeof parsed.msg_type !== "string") return;
+  const msgType = parsed.msg_type.toLowerCase();
+  if (msgType !== "stream_plugin_finish") return;
+  let dataObj: { uuid?: string; tool_output_content?: string } | null = null;
+  if (typeof parsed.data === "string" && parsed.data.trim()) {
+    try {
+      dataObj = JSON.parse(parsed.data);
+    } catch {
+      dataObj = null;
+    }
+  }
+  const streamUuid = dataObj?.uuid || msg.extra_info?.stream_plugin_running || "";
+  if (!streamUuid) return;
+  const entryId = functionCallStreamEntryIds.value[streamUuid];
+  if (!entryId) return;
+  updateChatEntry(entryId, (entry) => {
+    const unit = entry.functionCalls?.[0];
+    const nextUnit: FunctionCallUnit = {
+      callId: unit?.callId || streamUuid,
+      title: unit?.title || streamUuid,
+      status: "done",
+      content: dataObj?.tool_output_content || unit?.content || msg.content,
+      index: unit?.index,
+      streamUuid
+    };
+    return {
+      ...entry,
+      functionCalls: [nextUnit]
+    };
+  });
 }
 
 function markResponding() {
@@ -1276,41 +1330,25 @@ function upsertCardEntry(card: CardPayload) {
 }
 
 function breakThoughtSegment() {
-  if (!liveThoughtEntryId.value) return;
-  finalizeThoughtStream();
-  liveThoughtEntryId.value = null;
-  liveThoughtText.value = "";
+  return;
 }
 
-function ensureThoughtEntry() {
-  if (liveThoughtEntryId.value) return liveThoughtEntryId.value;
-  const id = pushChatEntry({
-    label: aiDisplayName.value,
-    body: "",
-    type: "thinking",
-    extra: "THINK"
-  });
-  liveThoughtEntryId.value = id;
-  liveThoughtText.value = "";
-  return id;
-}
-
-function appendThoughtDelta(delta: string) {
+function appendReasoningDelta(delta: string) {
   if (!delta) return;
-  const id = ensureThoughtEntry();
-  liveThoughtText.value = `${liveThoughtText.value}${delta}`;
+  let id = liveAnswerEntryId.value;
+  if (!id) {
+    id = pushChatEntry({
+      label: aiDisplayName.value,
+      body: "",
+      type: "ai",
+      extra: "STREAM"
+    });
+    liveAnswerEntryId.value = id;
+  }
+  liveReasoningText.value = `${liveReasoningText.value}${delta}`;
   updateChatEntry(id, (entry) => ({
     ...entry,
-    body: liveThoughtText.value
-  }));
-}
-
-function finalizeThoughtStream(status = "DONE") {
-  const id = liveThoughtEntryId.value;
-  if (!id) return;
-  updateChatEntry(id, (entry) => ({
-    ...entry,
-    extra: status
+    reasoning: liveReasoningText.value
   }));
 }
 
@@ -2919,7 +2957,12 @@ function handleSSEChunk(chunk: string) {
         }
       }
     } else if (eventName === "message") {
-      handleFunctionCallMessage(payload as StreamMessage);
+      const msg = payload as StreamMessage;
+      if (msg.type === "verbose") {
+        handleVerboseMessage(msg);
+      } else {
+        handleFunctionCallMessage(msg);
+      }
       markResponding();
     } else if (eventName === "card") {
       upsertCardEntry(payload as CardPayload);
@@ -2927,8 +2970,8 @@ function handleSSEChunk(chunk: string) {
     } else if (eventName === "delta") {
       const content = typeof payload.content === "string" ? payload.content : "";
       const channel = typeof payload.channel === "string" ? payload.channel : "answer";
-      if (channel === "thought") {
-        appendThoughtDelta(content);
+      if (channel === "reasoning" || channel === "thought") {
+        appendReasoningDelta(content);
       } else {
         hasStreamDelta.value = true;
         appendAnswerDelta(content);
@@ -2947,7 +2990,6 @@ function handleSSEChunk(chunk: string) {
           extra: "UI"
         });
       }
-      finalizeThoughtStream();
       if (reply) {
         if (hasStreamDelta.value) {
           stopAnswerStream();
@@ -2978,7 +3020,6 @@ function handleSSEChunk(chunk: string) {
       lastStreamError.value = nextError;
       streamStatus.value = "";
       streamStatusType.value = "";
-      finalizeThoughtStream("ERROR");
       stopAnswerStream();
       activeNodes.value = [];
       refreshActiveStatus();
@@ -3517,12 +3558,6 @@ function diffSummary(prev: string, next: string) {
   border-color: rgba(42, 157, 75, 0.2);
 }
 
-.timeline-item.thinking {
-  align-self: flex-start;
-  background: rgba(46, 111, 227, 0.04);
-  border-color: rgba(46, 111, 227, 0.12);
-}
-
 .timeline-item.warn {
   align-self: flex-start;
   background: rgba(230, 167, 0, 0.12);
@@ -3558,20 +3593,29 @@ function diffSummary(prev: string, next: string) {
   padding: 4px 0;
 }
 
-.thinking-toggle {
+.reasoning-content {
+  margin-bottom: 6px;
+}
+
+.reasoning-content p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.reasoning-toggle {
   border-radius: 10px;
   padding: 6px 8px;
   background: rgba(46, 111, 227, 0.04);
   border: 1px dashed rgba(46, 111, 227, 0.12);
 }
 
-.thinking-toggle summary {
+.reasoning-toggle summary {
   cursor: pointer;
   color: var(--muted);
   font-size: 12px;
 }
 
-.thinking-toggle[open] summary {
+.reasoning-toggle[open] summary {
   color: #3c6fd6;
   margin-bottom: 6px;
 }
@@ -3653,10 +3697,6 @@ function diffSummary(prev: string, next: string) {
   color: var(--ok);
 }
 
-.timeline-badge.thinking {
-  background: rgba(46, 111, 227, 0.12);
-  color: var(--info);
-}
 
 .timeline-badge.warn {
   background: rgba(230, 167, 0, 0.12);

@@ -1,8 +1,6 @@
 <template>
   <div class="card-renderer">
     <FileCreateCard v-if="card.card_type === 'file_create'" :card="card as FileCreateCardPayload" />
-    <StepCreateCard v-else-if="card.card_type === 'create_step'" :card="card as StepCreateCardPayload" />
-    <StepUpdateCard v-else-if="card.card_type === 'update_step'" :card="card as StepUpdateCardPayload" />
     <div v-else class="card fallback">
       <div class="card-title">未知卡片</div>
       <pre>{{ prettyCard }}</pre>
@@ -13,8 +11,6 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import FileCreateCard, { type FileCreateCardPayload } from "./cards/FileCreateCard.vue";
-import StepCreateCard, { type StepCreateCardPayload } from "./cards/StepCreateCard.vue";
-import StepUpdateCard, { type StepUpdateCardPayload } from "./cards/StepUpdateCard.vue";
 
 export type CardPayload = {
   card_type?: string;

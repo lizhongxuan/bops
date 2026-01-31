@@ -245,6 +245,54 @@ func TestBuildStreamMessageFromEvent(t *testing.T) {
 	if errorMsg.ExtraInfo.PluginStatus != "1" {
 		t.Fatalf("expected plugin_status 1, got %s", errorMsg.ExtraInfo.PluginStatus)
 	}
+
+	streamEvt := aiworkflow.Event{
+		Node:   "executor",
+		Status: "stream",
+		Data: map[string]any{
+			"stream_plugin_running": "stream-123",
+		},
+	}
+	streamMsg, ok := buildStreamMessageFromEvent(streamEvt, "reply-1", 3)
+	if !ok {
+		t.Fatalf("expected stream message to be built")
+	}
+	if streamMsg.Type != "tool_response" || streamMsg.IsFinish {
+		t.Fatalf("expected stream tool_response not finished, got type=%s finish=%v", streamMsg.Type, streamMsg.IsFinish)
+	}
+	if streamMsg.ExtraInfo.StreamPluginRunning != "stream-123" {
+		t.Fatalf("expected stream_plugin_running stream-123, got %s", streamMsg.ExtraInfo.StreamPluginRunning)
+	}
+
+	finishEvt := aiworkflow.Event{
+		Node:   "executor",
+		Status: "stream_finish",
+		Data: map[string]any{
+			"stream_plugin_running": "stream-123",
+			"tool_output_content":   "final output",
+		},
+	}
+	finishMsg, ok := buildStreamMessageFromEvent(finishEvt, "reply-1", 4)
+	if !ok {
+		t.Fatalf("expected stream finish message to be built")
+	}
+	if finishMsg.IsFinish != true {
+		t.Fatalf("expected stream finish to be marked finished")
+	}
+	if finishMsg.Content != "final output" {
+		t.Fatalf("expected tool_output_content to be used, got %s", finishMsg.Content)
+	}
+
+	verboseMsg, ok := buildStreamPluginFinishVerbose(finishEvt, "reply-1", 5)
+	if !ok {
+		t.Fatalf("expected stream plugin finish verbose message to be built")
+	}
+	if verboseMsg.Type != "verbose" {
+		t.Fatalf("expected verbose message type, got %s", verboseMsg.Type)
+	}
+	if !strings.Contains(verboseMsg.Content, "stream_plugin_finish") {
+		t.Fatalf("expected verbose content to include stream_plugin_finish")
+	}
 }
 
 func TestAIWorkflowStreamSSEOrder(t *testing.T) {
@@ -281,8 +329,8 @@ func TestAIWorkflowStreamSSEOrder(t *testing.T) {
 	if !strings.Contains(output, "\"channel\":\"answer\"") {
 		t.Fatalf("expected answer delta channel in stream")
 	}
-	if !strings.Contains(output, "\"channel\":\"thought\"") {
-		t.Fatalf("expected thought delta channel in stream")
+	if !strings.Contains(output, "\"channel\":\"reasoning\"") {
+		t.Fatalf("expected reasoning delta channel in stream")
 	}
 	if !strings.Contains(output, "event: status") {
 		t.Fatalf("expected status event in stream")
@@ -296,8 +344,14 @@ func TestAIWorkflowStreamSSEOrder(t *testing.T) {
 	if !strings.Contains(output, "\"type\":\"tool_response\"") {
 		t.Fatalf("expected tool_response message in stream")
 	}
-	if !strings.Contains(output, "\"card_type\":\"create_step\"") {
-		t.Fatalf("expected create_step card in stream")
+	if !strings.Contains(output, "\"call_id\":\"generator\"") {
+		t.Fatalf("expected call_id in stream")
+	}
+	if !strings.Contains(output, "\"execute_display_name\"") {
+		t.Fatalf("expected execute_display_name in stream")
+	}
+	if !strings.Contains(output, "\"plugin_status\"") {
+		t.Fatalf("expected plugin_status in stream")
 	}
 	if !strings.Contains(output, "\"card_type\":\"file_create\"") {
 		t.Fatalf("expected file_create card in stream")
