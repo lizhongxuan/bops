@@ -16,6 +16,14 @@ const sseStream = `event: status
   `event: message\n` +
   `data: {"message_id":"loop-1-2-verbose","reply_id":"reply-1","role":"assistant","type":"verbose","content":"{\\"msg_type\\":\\"stream_plugin_finish\\",\\"data\\":\\"{\\\\\\"uuid\\\\\\":\\\\\\"stream-123\\\\\\",\\\\\\"tool_output_content\\\\\\":\\\\\\"stream done\\\\\\"}\\"}","is_finish":true,"index":5,"extra_info":{"call_id":"write_file","stream_plugin_running":"stream-123","loop_id":"loop-1","iteration":2,"agent_status":"tool_result"}}\n\n` +
   `event: card\n` +
+  `data: {"card_type":"plan_step","step_id":"step-1","step_name":"install","step_status":"start","parent_step_id":"step-1"}\n\n` +
+  `event: card\n` +
+  `data: {"card_type":"subloop","step_id":"step-1","step_name":"install","round":1,"status":"start","message":"subloop round start","parent_step_id":"step-1"}\n\n` +
+  `event: card\n` +
+  `data: {"card_type":"yaml_patch","step_id":"step-1","step_name":"install","yaml_fragment":"- name: install\\n  action: cmd.run","parent_step_id":"step-1"}\n\n` +
+  `event: card\n` +
+  `data: {"card_type":"plan_step","step_id":"step-1","step_name":"install","step_status":"done","parent_step_id":"step-1"}\n\n` +
+  `event: card\n` +
   `data: {"card_type":"file_create","title":"创建文件","files":[{"path":"workflow.yaml","content":"version: v0.1"}]}\n\n` +
   `event: result\n` +
   `data: {"summary":"ok","plan":[{"step_name":"install","description":"install nginx","dependencies":[]}],"subagent_summaries":[{"agent_name":"reviewer","summary":"issues=0"}]}\n\n`;
@@ -181,6 +189,15 @@ const hasSecondIteration = loopEntries.some((entry) => (entry.label || "").inclu
 const hasFileCard = chatEntries.some(
   (entry) => entry.type === "card" && entry.card?.card_type === "file_create"
 );
+const hasPlanStepCard = chatEntries.some(
+  (entry) => entry.type === "card" && entry.card?.card_type === "plan_step"
+);
+const hasSubloopCard = chatEntries.some(
+  (entry) => entry.type === "card" && entry.card?.card_type === "subloop"
+);
+const hasYamlPatchCard = chatEntries.some(
+  (entry) => entry.type === "card" && entry.card?.card_type === "yaml_patch"
+);
 const hasPlan = chatEntries.some((entry) => entry.label === "计划");
 const hasSummaries = chatEntries.some((entry) => entry.label === "子 Agent 汇总");
 
@@ -210,6 +227,18 @@ if (loopEntries.length < 2 || !hasSecondIteration) {
 }
 if (!hasFileCard) {
   console.error("E2E failed: card entries missing");
+  process.exit(1);
+}
+if (!hasPlanStepCard) {
+  console.error("E2E failed: plan_step card missing");
+  process.exit(1);
+}
+if (!hasSubloopCard) {
+  console.error("E2E failed: subloop card missing");
+  process.exit(1);
+}
+if (!hasYamlPatchCard) {
+  console.error("E2E failed: yaml_patch card missing");
   process.exit(1);
 }
 if (!hasPlan) {

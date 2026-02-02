@@ -4,16 +4,20 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
+	"bops/internal/logging"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	einojsonschema "github.com/eino-contrib/jsonschema"
 	sjsonschema "github.com/santhosh-tekuri/jsonschema/v6"
+	"go.uber.org/zap"
 )
 
 type ExecTool struct {
@@ -86,12 +90,30 @@ func (t *ExecTool) InvokableRun(ctx context.Context, argumentsInJSON string, opt
 	if payload == "" {
 		payload = "{}"
 	}
+	started := time.Now()
+	logging.L().Info("skill start",
+		zap.String("skill", t.skillName),
+		zap.String("tool", t.info.Name),
+		zap.String("args", payload),
+	)
 	inst, err := sjsonschema.UnmarshalJSON(strings.NewReader(payload))
 	if err != nil {
+		logging.L().Error("skill end",
+			zap.String("skill", t.skillName),
+			zap.String("tool", t.info.Name),
+			zap.Error(err),
+			zap.Duration("elapsed", time.Since(started)),
+		)
 		return "", fmt.Errorf("invalid tool arguments: %w", err)
 	}
 	if t.validator != nil {
 		if err := t.validator.Validate(inst); err != nil {
+			logging.L().Error("skill end",
+				zap.String("skill", t.skillName),
+				zap.String("tool", t.info.Name),
+				zap.Error(err),
+				zap.Duration("elapsed", time.Since(started)),
+			)
 			return "", fmt.Errorf("tool arguments validation failed: %w", err)
 		}
 	}
@@ -109,15 +131,39 @@ func (t *ExecTool) InvokableRun(ctx context.Context, argumentsInJSON string, opt
 	if err := cmd.Run(); err != nil {
 		errOutput := strings.TrimSpace(stderr.String())
 		if errOutput != "" {
+			logging.L().Error("skill end",
+				zap.String("skill", t.skillName),
+				zap.String("tool", t.info.Name),
+				zap.Error(errors.New(errOutput)),
+				zap.Duration("elapsed", time.Since(started)),
+			)
 			return "", fmt.Errorf("tool execution failed: %s", errOutput)
 		}
+		logging.L().Error("skill end",
+			zap.String("skill", t.skillName),
+			zap.String("tool", t.info.Name),
+			zap.Error(err),
+			zap.Duration("elapsed", time.Since(started)),
+		)
 		return "", fmt.Errorf("tool execution failed: %w", err)
 	}
 
 	output := strings.TrimSpace(stdout.String())
 	if output == "" {
+		logging.L().Info("skill end",
+			zap.String("skill", t.skillName),
+			zap.String("tool", t.info.Name),
+			zap.Int("output_len", len(strings.TrimSpace(stderr.String()))),
+			zap.Duration("elapsed", time.Since(started)),
+		)
 		return strings.TrimSpace(stderr.String()), nil
 	}
+	logging.L().Info("skill end",
+		zap.String("skill", t.skillName),
+		zap.String("tool", t.info.Name),
+		zap.Int("output_len", len(output)),
+		zap.Duration("elapsed", time.Since(started)),
+	)
 	return output, nil
 }
 

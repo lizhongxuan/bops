@@ -32,6 +32,12 @@ func (p *Pipeline) RunAgentLoop(ctx context.Context, prompt string, context map[
 	)
 	spec := normalizeAgentSpec(opts.AgentSpec)
 	opts.EventSink = wrapEventSinkWithAgent(opts.EventSink, spec)
+	started := time.Now()
+	logging.L().Info("agent loop start",
+		zap.String("agent", spec.Name),
+		zap.String("role", spec.Role),
+		zap.Int("prompt_len", len(prompt)),
+	)
 	state := &State{
 		Mode:         ModeGenerate,
 		Prompt:       prompt,
@@ -60,11 +66,177 @@ func (p *Pipeline) RunAgentLoop(ctx context.Context, prompt string, context map[
 			if loopState != nil && loopState.LoopMetrics != nil {
 				fallbackState.LoopMetrics = loopState.LoopMetrics
 			}
+			logging.L().Info("agent loop end",
+				zap.String("agent", spec.Name),
+				zap.String("role", spec.Role),
+				zap.Bool("fallback", true),
+				zap.Duration("elapsed", time.Since(started)),
+			)
 			return fallbackState, nil
 		}
+		logging.L().Error("agent loop end",
+			zap.String("agent", spec.Name),
+			zap.String("role", spec.Role),
+			zap.Bool("fallback", true),
+			zap.Error(fallbackErr),
+			zap.Duration("elapsed", time.Since(started)),
+		)
 		return loopState, fallbackErr
 	}
+	if err != nil {
+		logging.L().Error("agent loop end",
+			zap.String("agent", spec.Name),
+			zap.String("role", spec.Role),
+			zap.Error(err),
+			zap.Duration("elapsed", time.Since(started)),
+		)
+	} else {
+		logging.L().Info("agent loop end",
+			zap.String("agent", spec.Name),
+			zap.String("role", spec.Role),
+			zap.Duration("elapsed", time.Since(started)),
+		)
+	}
 	return loopState, err
+}
+
+func (p *Pipeline) RunCoordinatorLoop(ctx context.Context, prompt string, context map[string]any, opts RunOptions) (*State, error) {
+	if p == nil || p.cfg.Client == nil {
+		return nil, fmt.Errorf("ai client is not configured")
+	}
+	spec := normalizeAgentSpec(opts.AgentSpec)
+	opts.EventSink = wrapEventSinkWithAgent(opts.EventSink, spec)
+	started := time.Now()
+	logging.L().Info("coordinator loop start",
+		zap.String("agent", spec.Name),
+		zap.String("role", spec.Role),
+		zap.Int("prompt_len", len(prompt)),
+	)
+	state := &State{
+		Mode:         ModeGenerate,
+		Prompt:       prompt,
+		Context:      context,
+		ContextText:  opts.ContextText,
+		SystemPrompt: pickSystemPrompt(opts.SystemPrompt, p.cfg.SystemPrompt),
+		AgentID:      spec.Name,
+		AgentName:    spec.Name,
+		AgentRole:    spec.Role,
+		MaxRetries:   pickMaxRetries(opts.MaxRetries, p.cfg.MaxRetries),
+		EventSink:    opts.EventSink,
+		StreamSink:   opts.StreamSink,
+		BaseYAML:     opts.BaseYAML,
+		StepStatuses: make(map[string]StepStatus),
+	}
+	store := NewStateStore(opts.BaseYAML)
+
+	if _, err := p.plan(ctx, state); err != nil {
+		logging.L().Error("coordinator loop end",
+			zap.String("agent", spec.Name),
+			zap.String("role", spec.Role),
+			zap.Error(err),
+			zap.Duration("elapsed", time.Since(started)),
+		)
+		return state, err
+	}
+	if len(state.Plan) == 0 {
+		logging.L().Info("coordinator loop end",
+			zap.String("agent", spec.Name),
+			zap.String("role", spec.Role),
+			zap.Duration("elapsed", time.Since(started)),
+		)
+		return state, nil
+	}
+	store.SetPlan(state.Plan)
+
+	for i := range state.Plan {
+		step := &state.Plan[i]
+		if strings.TrimSpace(step.ID) == "" {
+			step.ID = normalizePlanID(step.StepName, i)
+		}
+		if step.Status == "" {
+			step.Status = StepStatusPending
+		}
+		setStepStatus(state, step.ID, step.Status)
+	}
+
+	for i := range state.Plan {
+		step := &state.Plan[i]
+		state.CurrentStepID = step.ID
+		step.Status = StepStatusInProgress
+		setStepStatus(state, step.ID, StepStatusInProgress)
+		emitStepEvent(state, "plan_step_start", *step, "start", "step start", nil)
+
+		result, err := p.runSubLoop(ctx, *step, state, opts)
+		if err != nil {
+			step.Status = StepStatusFailed
+			setStepStatus(state, step.ID, StepStatusFailed)
+			logging.L().Error("coordinator loop end",
+				zap.String("agent", spec.Name),
+				zap.String("role", spec.Role),
+				zap.Error(err),
+				zap.Duration("elapsed", time.Since(started)),
+			)
+			return state, err
+		}
+		if strings.TrimSpace(result.YAMLFragment) != "" {
+			if err := store.UpdateYAMLFragment(result.YAMLFragment, step.ID); err != nil {
+				step.Status = StepStatusFailed
+				setStepStatus(state, step.ID, StepStatusFailed)
+				logging.L().Error("coordinator loop end",
+					zap.String("agent", spec.Name),
+					zap.String("role", spec.Role),
+					zap.Error(err),
+					zap.Duration("elapsed", time.Since(started)),
+				)
+				return state, err
+			}
+			emitStepEvent(state, "merge_patch", *step, "done", "merge patch", map[string]any{
+				"yaml_fragment": result.YAMLFragment,
+			})
+			snapshot := store.Snapshot()
+			state.YAML = snapshot.YAML
+			state.History = snapshot.History
+		}
+
+		step.Status = StepStatusDone
+		setStepStatus(state, step.ID, StepStatusDone)
+		emitStepEvent(state, "plan_step_done", *step, "done", "step done", nil)
+	}
+	logging.L().Info("coordinator loop end",
+		zap.String("agent", spec.Name),
+		zap.String("role", spec.Role),
+		zap.Duration("elapsed", time.Since(started)),
+	)
+	return state, nil
+}
+
+func emitStepEvent(state *State, eventType string, step PlanStep, status string, message string, data map[string]any) {
+	if state == nil || state.EventSink == nil {
+		return
+	}
+	if data == nil {
+		data = map[string]any{}
+	}
+	if _, ok := data["step_id"]; !ok {
+		data["step_id"] = step.ID
+	}
+	if _, ok := data["step_name"]; !ok {
+		data["step_name"] = step.StepName
+	}
+	state.EventSink(Event{
+		Node:         eventType,
+		Status:       status,
+		Message:      message,
+		CallID:       eventType,
+		DisplayName:  eventType,
+		Stage:        status,
+		AgentID:      state.AgentID,
+		AgentName:    state.AgentName,
+		AgentRole:    state.AgentRole,
+		EventType:    eventType,
+		ParentStepID: step.ID,
+		Data:         data,
+	})
 }
 
 func (p *Pipeline) runAgentLoop(ctx context.Context, state *State, opts RunOptions) (*State, error) {

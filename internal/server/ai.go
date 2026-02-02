@@ -122,6 +122,9 @@ type aiStreamRequest struct {
 
 const (
 	cardTypeFileCreate = "file_create"
+	cardTypePlanStep   = "plan_step"
+	cardTypeSubloop    = "subloop"
+	cardTypeYamlPatch  = "yaml_patch"
 )
 
 type streamMessage struct {
@@ -148,6 +151,8 @@ type streamMessageExt struct {
 	AgentID             string `json:"agent_id,omitempty"`
 	AgentName           string `json:"agent_name,omitempty"`
 	AgentRole           string `json:"agent_role,omitempty"`
+	EventType           string `json:"event_type,omitempty"`
+	ParentStepID        string `json:"parent_step_id,omitempty"`
 }
 
 func (s *Server) handleAIChatSessions(w http.ResponseWriter, r *http.Request) {
@@ -759,6 +764,11 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 		case evt, ok := <-events:
 			if ok {
 				writeSSE(w, "status", evt)
+				if card, ok := buildCardFromEvent(evt, replyID); ok {
+					writeSSE(w, "card", card)
+					flusher.Flush()
+					continue
+				}
 				if evt.Status == "stream_finish" || evt.Status == "stream_done" {
 					streamUUID := streamPluginRunningValue(evt)
 					if streamUUID == "" {
@@ -1059,8 +1069,99 @@ func buildStreamMessageFromEvent(evt aiworkflow.Event, replyID string, index int
 			AgentID:             evt.AgentID,
 			AgentName:           evt.AgentName,
 			AgentRole:           evt.AgentRole,
+			EventType:           evt.EventType,
+			ParentStepID:        evt.ParentStepID,
 		},
 	}, true
+}
+
+func buildCardFromEvent(evt aiworkflow.Event, replyID string) (map[string]any, bool) {
+	eventType := strings.TrimSpace(evt.EventType)
+	if eventType == "" {
+		return nil, false
+	}
+	stepID := strings.TrimSpace(evt.ParentStepID)
+	stepName := ""
+	if evt.Data != nil {
+		if value, ok := evt.Data["step_name"].(string); ok {
+			stepName = value
+		}
+	}
+	switch eventType {
+	case "plan_step_start", "plan_step_done":
+		cardID := ""
+		if stepID != "" {
+			cardID = fmt.Sprintf("plan-step-%s", stepID)
+		} else {
+			cardID = fmt.Sprintf("plan-step-%d", time.Now().UnixNano())
+		}
+		return map[string]any{
+			"card_id":        cardID,
+			"reply_id":       replyID,
+			"card_type":      cardTypePlanStep,
+			"step_id":        stepID,
+			"step_name":      stepName,
+			"event_type":     eventType,
+			"step_status":    evt.Status,
+			"agent_name":     evt.AgentName,
+			"agent_role":     evt.AgentRole,
+			"parent_step_id": stepID,
+		}, true
+	case "subloop_round":
+		round := 0
+		if evt.Data != nil {
+			if value, ok := evt.Data["round"].(int); ok {
+				round = value
+			} else if value, ok := evt.Data["round"].(float64); ok {
+				round = int(value)
+			}
+		}
+		cardID := ""
+		if stepID != "" {
+			cardID = fmt.Sprintf("subloop-%s-%d", stepID, round)
+		} else {
+			cardID = fmt.Sprintf("subloop-%d-%d", round, time.Now().UnixNano())
+		}
+		return map[string]any{
+			"card_id":        cardID,
+			"reply_id":       replyID,
+			"card_type":      cardTypeSubloop,
+			"step_id":        stepID,
+			"step_name":      stepName,
+			"event_type":     eventType,
+			"round":          round,
+			"status":         evt.Status,
+			"message":        evt.Message,
+			"agent_name":     evt.AgentName,
+			"agent_role":     evt.AgentRole,
+			"parent_step_id": stepID,
+		}, true
+	case "merge_patch":
+		fragment := ""
+		if evt.Data != nil {
+			if value, ok := evt.Data["yaml_fragment"].(string); ok {
+				fragment = value
+			}
+		}
+		if strings.TrimSpace(fragment) == "" {
+			return nil, false
+		}
+		cardID := fmt.Sprintf("patch-%s-%d", stepID, time.Now().UnixNano())
+		return map[string]any{
+			"card_id":        cardID,
+			"reply_id":       replyID,
+			"card_type":      cardTypeYamlPatch,
+			"step_id":        stepID,
+			"step_name":      stepName,
+			"event_type":     eventType,
+			"yaml_fragment":  fragment,
+			"agent_name":     evt.AgentName,
+			"agent_role":     evt.AgentRole,
+			"parent_step_id": stepID,
+		}, true
+	default:
+		return nil, false
+	}
 }
 
 func buildStreamPluginFinishVerbose(evt aiworkflow.Event, replyID string, index int) (streamMessage, bool) {
@@ -1109,6 +1210,8 @@ func buildStreamPluginFinishVerbose(evt aiworkflow.Event, replyID string, index 
 			AgentID:             evt.AgentID,
 			AgentName:           evt.AgentName,
 			AgentRole:           evt.AgentRole,
+			EventType:           evt.EventType,
+			ParentStepID:        evt.ParentStepID,
 		},
 	}, true
 }
@@ -1269,6 +1372,10 @@ func (s *Server) buildLoopToolExecutor(spec aiworkflow.AgentSpec) (aiworkflow.To
 	if agentName == "" {
 		agentName = "loop"
 	}
+	logging.L().Info("loop tools build start",
+		zap.String("agent", agentName),
+		zap.Strings("skills", skillsRef),
+	)
 	bundle, err := factory.Build(skills.AgentSpec{
 		Name:   agentName,
 		Skills: skillsRef,
@@ -1295,6 +1402,11 @@ func (s *Server) buildLoopToolExecutor(spec aiworkflow.AgentSpec) (aiworkflow.To
 		return nil, nil
 	}
 	sort.Strings(names)
+	logging.L().Info("loop tools build done",
+		zap.String("agent", agentName),
+		zap.Int("tool_count", len(names)),
+		zap.Strings("tools", names),
+	)
 	executor := func(ctx context.Context, name string, args map[string]any) (string, error) {
 		toolItem, ok := toolMap[name]
 		if !ok {

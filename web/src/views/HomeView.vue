@@ -73,14 +73,6 @@
           </ul>
         </div>
 
-        <div v-if="pendingQuestions.length" class="pending-questions">
-          <div class="pending-title">还需要确认</div>
-          <div class="pending-actions">
-            <span class="pending-count">共 {{ pendingQuestions.length }} 项</span>
-            <button class="btn btn-sm" type="button" @click="openQuestionModal()">填写确认</button>
-          </div>
-        </div>
-
         <div class="composer">
           <div class="chat-toolbar">
             <button class="btn ghost btn-sm" type="button" @click="createChatSession">
@@ -516,32 +508,6 @@
         <div v-else class="empty">暂无聊天会话</div>
       </div>
     </div>
-    <div v-if="showQuestionModal" class="modal-backdrop" @click.self="closeQuestionModal">
-      <form class="config-modal question-modal" @submit.prevent="submitQuestionAnswers">
-        <div class="modal-head">
-          <h3>补全确认信息</h3>
-          <button class="modal-close" type="button" @click="closeQuestionModal">&#10005;</button>
-        </div>
-        <p class="modal-summary">请手动补全下列确认项，提交后会更新工作流。</p>
-        <div v-if="pendingQuestions.length" class="question-list">
-          <div class="question-item" v-for="(question, index) in pendingQuestions" :key="question">
-            <label :for="`question-input-${index}`">{{ question }}</label>
-            <textarea
-              :id="`question-input-${index}`"
-              v-model="questionInputs[question]"
-              rows="2"
-              placeholder="请输入确认信息"
-            ></textarea>
-          </div>
-        </div>
-        <div v-else class="empty">暂无需要补充的内容</div>
-        <div v-if="questionInputError" class="alert warn">{{ questionInputError }}</div>
-        <div class="modal-actions">
-          <button class="btn ghost btn-sm" type="button" @click="closeQuestionModal">取消</button>
-          <button class="btn primary btn-sm" type="submit" :disabled="busy">提交确认</button>
-        </div>
-      </form>
-    </div>
     <div v-if="showStepDetailModal" class="modal-backdrop" @click.self="closeStepDetailModal">
       <div class="detail-modal">
         <div class="modal-head">
@@ -621,7 +587,7 @@ import { ApiError, apiBase, request } from "../lib/api";
 import StepDetailForm from "../components/StepDetailForm.vue";
 import FunctionCallPanel, { type FunctionCallUnit } from "../components/FunctionCallPanel.vue";
 import CardRenderer, { type CardPayload } from "../components/CardRenderer.vue";
-import { normalizeQuestions, resolveQuestions } from "../lib/ai-questions";
+import { normalizeQuestions } from "../lib/ai-questions";
 import { createDefaultStepWith, type DraftStep } from "../lib/draft";
 import { parseSteps, type StepSummary } from "../lib/workflowSteps";
 
@@ -702,6 +668,8 @@ type StreamMessage = {
     agent_id?: string;
     agent_name?: string;
     agent_role?: string;
+    event_type?: string;
+    parent_step_id?: string;
   };
 };
 
@@ -868,7 +836,8 @@ const planMode = ref("manual-approve");
 const environmentNote = ref("");
 const router = useRouter();
 const SESSION_STORAGE_KEY = "bops_chat_session_id";
-const DRAFT_STORAGE_KEY = "bops_workflow_draft";
+const DRAFT_STORAGE_PREFIX = "bops_workflow_draft:";
+const DRAFT_SESSION_MAP_KEY = "bops_workflow_draft_session";
 const VALIDATION_CONSOLE_KEY = "bops.validation-console";
 const AUTO_SCROLL_THRESHOLD = 60;
 
@@ -882,9 +851,6 @@ const showExamples = ref(false);
 const showConfigModal = ref(false);
 const showHistoryModal = ref(false);
 const showSessionModal = ref(false);
-const showQuestionModal = ref(false);
-const questionInputs = ref<Record<string, string>>({});
-const questionInputError = ref("");
 const showStepDetailModal = ref(false);
 const detailStepIndex = ref<number | null>(null);
 const showStepYamlModal = ref(false);
@@ -949,10 +915,6 @@ const canFix = computed(() => {
   if (!yaml.value.trim()) return false;
   return summary.value.issues.length > 0 || validation.value.issues.length > 0;
 });
-const pendingQuestions = computed(() => {
-  const issues = summary.value.issues.length ? summary.value.issues : validation.value.issues;
-  return resolveQuestions(questionOverrides.value, issues, 6);
-});
 const aiConfigured = computed(() => aiConfig.value.configured);
 const aiDisplayName = computed(() => aiConfig.value.provider || defaultAIName);
 const recentProgressEvents = computed<ProgressEvent[]>(() =>
@@ -978,16 +940,103 @@ type DraftSnapshot = {
   draft_id?: string;
 };
 
-function loadDraftFromStorage() {
+function draftStorageKey(id: string) {
+  return `${DRAFT_STORAGE_PREFIX}${id}`;
+}
+
+function readDraftSessionMap() {
+  if (typeof window === "undefined") return {};
+  const raw = window.localStorage.getItem(DRAFT_SESSION_MAP_KEY);
+  if (!raw) return {};
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    const map: Record<string, string> = {};
+    if (!parsed || typeof parsed !== "object") return map;
+    Object.entries(parsed).forEach(([key, value]) => {
+      if (typeof value === "string" && value.trim()) {
+        map[key] = value.trim();
+      }
+    });
+    return map;
+  } catch {
+    return {};
+  }
+}
+
+function writeDraftSessionMap(map: Record<string, string>) {
   if (typeof window === "undefined") return;
-  const raw = window.localStorage.getItem(DRAFT_STORAGE_KEY);
-  if (!raw) return;
+  try {
+    window.localStorage.setItem(DRAFT_SESSION_MAP_KEY, JSON.stringify(map));
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function setSessionDraftId(sessionId: string, nextDraftId: string) {
+  if (typeof window === "undefined") return;
+  if (!sessionId) return;
+  const map = readDraftSessionMap();
+  if (nextDraftId.trim()) {
+    map[sessionId] = nextDraftId.trim();
+  } else {
+    delete map[sessionId];
+  }
+  writeDraftSessionMap(map);
+}
+
+function resetWorkspaceState() {
+  yaml.value = "";
+  visualYaml.value = "";
+  visualDirty.value = false;
+  yamlDirty.value = false;
+  draftId.value = "";
+  history.value = [];
+  validation.value = { ok: true, issues: [] };
+  validationTouched.value = false;
+  executeResult.value = null;
+  loopMetrics.value = null;
+  summary.value = {
+    summary: "",
+    steps: 0,
+    riskLevel: "",
+    riskNotes: [],
+    issues: [],
+    needsReview: false
+  };
+  questionOverrides.value = [];
+  stepIssueIndexes.value = [];
+  selectedStepIndex.value = null;
+  humanConfirmed.value = false;
+  confirmReason.value = "";
+  saveName.value = "";
+  resetStreamState();
+}
+
+function loadWorkspaceForSession(sessionId: string) {
+  if (typeof window === "undefined") return;
+  if (!sessionId) {
+    resetWorkspaceState();
+    return;
+  }
+  const map = readDraftSessionMap();
+  const storedDraftId = map[sessionId];
+  if (!storedDraftId) {
+    resetWorkspaceState();
+    return;
+  }
+  const raw = window.localStorage.getItem(draftStorageKey(storedDraftId));
+  if (!raw) {
+    setSessionDraftId(sessionId, "");
+    resetWorkspaceState();
+    return;
+  }
   try {
     const parsed = JSON.parse(raw) as DraftSnapshot;
     const savedAutoSync = typeof parsed.auto_sync === "boolean" ? parsed.auto_sync : autoSync.value;
     autoSync.value = savedAutoSync;
     const savedYaml = typeof parsed.yaml === "string" ? parsed.yaml : "";
     const savedVisual = typeof parsed.visual_yaml === "string" ? parsed.visual_yaml : "";
+    draftId.value = storedDraftId;
     if (!savedAutoSync) {
       if (savedVisual) {
         visualYaml.value = savedVisual;
@@ -1002,16 +1051,15 @@ function loadDraftFromStorage() {
     } else if (savedVisual) {
       yaml.value = savedVisual;
     }
-    if (typeof parsed.draft_id === "string") {
-      draftId.value = parsed.draft_id;
-    }
   } catch {
-    window.localStorage.removeItem(DRAFT_STORAGE_KEY);
+    setSessionDraftId(sessionId, "");
+    resetWorkspaceState();
   }
 }
 
 function persistDraftToStorage() {
   if (typeof window === "undefined") return;
+  if (!draftId.value.trim()) return;
   if (draftSaveTimer) {
     window.clearTimeout(draftSaveTimer);
   }
@@ -1023,14 +1071,15 @@ function persistDraftToStorage() {
       draft_id: draftId.value
     };
     try {
-      window.localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(payload));
+      window.localStorage.setItem(draftStorageKey(draftId.value), JSON.stringify(payload));
+      if (chatSessionId.value) {
+        setSessionDraftId(chatSessionId.value, draftId.value);
+      }
     } catch {
       // ignore storage errors
     }
   }, 200);
 }
-
-loadDraftFromStorage();
 watch(
   yaml,
   (next, prev) => {
@@ -1056,7 +1105,7 @@ watch(
   { immediate: true }
 );
 
-watch([yaml, visualYaml, autoSync, draftId], () => {
+watch([yaml, visualYaml, autoSync, draftId, chatSessionId], () => {
   persistDraftToStorage();
 });
 
@@ -1067,27 +1116,22 @@ watch(aiDisplayName, (next) => {
   });
 });
 
-watch(saveName, () => {
+watch(saveName, (next) => {
   if (saveError.value) {
     saveError.value = "";
   }
+  const trimmed = next.trim();
+  if (!trimmed) return;
+  if (visualDirty.value || yamlDirty.value) return;
+  if (!yaml.value.trim()) return;
+  const updated = replaceTopLevelValue(yaml.value, "name", trimmed);
+  if (updated !== yaml.value) {
+    yaml.value = updated;
+    visualYaml.value = updated;
+    visualDirty.value = false;
+    yamlDirty.value = false;
+  }
 });
-
-watch(
-  pendingQuestions,
-  (next) => {
-    const nextMap: Record<string, string> = {};
-    next.forEach((question) => {
-      nextMap[question] = questionInputs.value[question] || "";
-    });
-    questionInputs.value = nextMap;
-    if (!next.length) {
-      showQuestionModal.value = false;
-      questionInputError.value = "";
-    }
-  },
-  { immediate: true }
-);
 
 watch(chatEntries, () => {
   scheduleChatScroll();
@@ -1364,12 +1408,25 @@ function upsertCardEntry(card: CardPayload) {
   const cardId = typeof (card as Record<string, unknown>).card_id === "string"
     ? String((card as Record<string, unknown>).card_id)
     : "";
-  const replyId = typeof (card as Record<string, unknown>).reply_id === "string"
+  const baseReplyId = typeof (card as Record<string, unknown>).reply_id === "string"
     ? String((card as Record<string, unknown>).reply_id)
     : currentReplyId.value || "";
+  const parentStepId = typeof (card as Record<string, unknown>).parent_step_id === "string"
+    ? String((card as Record<string, unknown>).parent_step_id)
+    : typeof (card as Record<string, unknown>).step_id === "string"
+      ? String((card as Record<string, unknown>).step_id)
+      : "";
+  const replyId = parentStepId ? `${baseReplyId}:${parentStepId}` : baseReplyId;
+  const cardType = typeof (card as Record<string, unknown>).card_type === "string"
+    ? String((card as Record<string, unknown>).card_type)
+    : "";
+  const label = cardType === "plan_step" ? "步骤"
+    : cardType === "subloop" ? "子循环"
+      : cardType === "yaml_patch" ? "片段"
+        : "卡片";
   if (!cardId) {
     pushChatEntry({
-      label: "卡片",
+      label,
       body: "",
       type: "card",
       extra: "CARD",
@@ -1390,7 +1447,7 @@ function upsertCardEntry(card: CardPayload) {
     return;
   }
   pushChatEntry({
-    label: "卡片",
+    label,
     body: "",
     type: "card",
     extra: "CARD",
@@ -1551,6 +1608,7 @@ async function restoreChatSession(id: string) {
     chatSessionTitle.value = data.session.title || "新会话";
     window.localStorage.setItem(SESSION_STORAGE_KEY, chatSessionId.value);
     setChatEntriesFromSession(data.session);
+    loadWorkspaceForSession(chatSessionId.value);
   } catch (err) {
     chatSessionId.value = "";
     chatSessionTitle.value = "";
@@ -1567,6 +1625,7 @@ async function createChatSession() {
     chatSessionTitle.value = data.session.title || "新会话";
     window.localStorage.setItem(SESSION_STORAGE_KEY, chatSessionId.value);
     setChatEntriesFromSession(data.session);
+    loadWorkspaceForSession(chatSessionId.value);
     await loadChatSessions();
     showSessionModal.value = false;
   } catch (err) {
@@ -1616,56 +1675,6 @@ function applyExample(text: string) {
   showExamples.value = false;
 }
 
-function openQuestionModal(question?: string) {
-  if (!pendingQuestions.value.length) return;
-  questionInputError.value = "";
-  showQuestionModal.value = true;
-  let focusIndex = 0;
-  if (typeof question === "string" && question.trim()) {
-    const index = pendingQuestions.value.indexOf(question.trim());
-    if (index >= 0) {
-      focusIndex = index;
-    }
-  }
-  void nextTick(() => {
-    const input = document.getElementById(`question-input-${focusIndex}`) as HTMLTextAreaElement | null;
-    if (input) {
-      input.focus();
-    }
-  });
-}
-
-function closeQuestionModal() {
-  showQuestionModal.value = false;
-  questionInputError.value = "";
-}
-
-function buildQuestionAnswerMessage() {
-  const lines = pendingQuestions.value
-    .map((question) => {
-      const answer = (questionInputs.value[question] || "").trim();
-      if (!answer) return "";
-      return `- ${question}: ${answer}`;
-    })
-    .filter(Boolean);
-  if (!lines.length) return "";
-  return ["补充信息：", ...lines].join("\n");
-}
-
-async function submitQuestionAnswers() {
-  if (busy.value) {
-    questionInputError.value = "AI 正在生成，请稍后提交。";
-    return;
-  }
-  const message = buildQuestionAnswerMessage();
-  if (!message) {
-    questionInputError.value = "请至少填写一项确认信息。";
-    return;
-  }
-  questionInputError.value = "";
-  showQuestionModal.value = false;
-  await startStreamWithMessage(message);
-}
 
 function toggleExamples() {
   showExamples.value = !showExamples.value;
@@ -1708,13 +1717,6 @@ function handleUiAction(event: CustomEvent) {
   const detail = event?.detail as { type?: string; payload?: any } | undefined;
   if (!detail || typeof detail !== "object") return;
   const type = detail.type;
-  if (type === "prompt") {
-    const promptText = typeof detail.payload?.prompt === "string" ? detail.payload.prompt : "";
-    if (promptText.trim()) {
-      openQuestionModal(promptText);
-    }
-    return;
-  }
   if (type === "focus_step") {
     const index = Number(detail.payload?.index);
     if (Number.isFinite(index)) {
@@ -1863,9 +1865,58 @@ function setVisualYaml(next: string, markDirty = true) {
   }
 }
 
+const defaultWorkflowName = "draft-workflow";
+
+function readTopLevelValue(content: string, key: string) {
+  const match = content.match(new RegExp(`^${key}\\s*:\\s*(.*)$`, "m"));
+  if (!match) return "";
+  return match[1].replace(/^"|"$/g, "").trim();
+}
+
+function findTopLevelKeyIndex(lines: string[], key: string) {
+  const regex = new RegExp(`^${key}\\s*:\\s*$`);
+  for (let i = 0; i < lines.length; i += 1) {
+    if (regex.test(lines[i])) {
+      return i;
+    }
+  }
+  return null;
+}
+
+function replaceTopLevelValue(content: string, key: string, value: string) {
+  const lines = content.split(/\r?\n/);
+  const index = lines.findIndex((line) => new RegExp(`^${key}\\s*:`).test(line));
+  const formatted = `${key}: ${formatScalar(value)}`;
+
+  if (index === -1) {
+    const insertIndex = findTopLevelKeyIndex(lines, "version") ?? 0;
+    const next = [...lines.slice(0, insertIndex + 1), formatted, ...lines.slice(insertIndex + 1)];
+    return next.join("\n").trimEnd() + "\n";
+  }
+
+  lines[index] = formatted;
+  return lines.join("\n");
+}
+
+function resolveWorkflowName() {
+  const trimmed = saveName.value.trim();
+  if (trimmed) return trimmed;
+  const fromYaml = readTopLevelValue(getVisualYaml(), "name");
+  return fromYaml || defaultWorkflowName;
+}
+
+function applyWorkflowName(next: string) {
+  const trimmed = next.trim();
+  if (!trimmed) return next;
+  const desired = resolveWorkflowName();
+  if (!desired) return next;
+  return replaceTopLevelValue(trimmed, "name", desired);
+}
+
 function applyAIGeneratedYaml(next: string) {
-  yaml.value = next;
-  visualYaml.value = next;
+  const updated = applyWorkflowName(next);
+  yaml.value = updated;
+  visualYaml.value = updated;
   visualDirty.value = false;
   yamlDirty.value = false;
 }
@@ -3154,9 +3205,10 @@ function applyResult(payload: Record<string, unknown>): StreamReply | null {
   const replyLines: string[] = ["已更新到工作流。"];
   let replyType: ChatEntry["type"] = "ai";
   if (questions.length) {
-    const focus = questions.slice(0, 2).join("、");
-    replyLines.push(focus ? `还需要确认：${focus}。` : "还需要确认一些信息。");
-    replyLines.push("点击下方“填写确认”继续补充。");
+    replyLines.push("还需要补充以下信息，请直接在对话框回复：");
+    questions.forEach((question) => {
+      replyLines.push(`- ${question}`);
+    });
     replyType = "warn";
   } else if (issueCount) {
     replyLines.push(`校验发现 ${issueCount} 项问题，可点击“修复”或在右侧调整。`);
@@ -3173,6 +3225,9 @@ function applyResult(payload: Record<string, unknown>): StreamReply | null {
   }
   if (typeof payload.draft_id === "string") {
     draftId.value = payload.draft_id;
+    if (chatSessionId.value) {
+      setSessionDraftId(chatSessionId.value, payload.draft_id);
+    }
   }
   humanConfirmed.value = false;
   confirmReason.value = "";
@@ -3910,32 +3965,6 @@ function diffSummary(prev: string, next: string) {
   text-decoration: underline;
 }
 
-.pending-questions {
-  padding: 10px 12px;
-  border-radius: 12px;
-  border: 1px dashed rgba(27, 27, 27, 0.12);
-  background: rgba(255, 255, 255, 0.7);
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-}
-
-.pending-title {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.pending-actions {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-}
-
-.pending-count {
-  font-size: 12px;
-  color: var(--muted);
-}
 
 .chat-toolbar {
   display: flex;
@@ -4615,36 +4644,6 @@ textarea {
   line-height: 1.6;
 }
 
-.question-modal {
-  max-height: 80vh;
-  overflow: hidden;
-}
-
-.question-list {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  max-height: 46vh;
-  overflow: auto;
-  padding-right: 4px;
-}
-
-.question-item {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.question-item label {
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.question-item textarea {
-  min-height: 70px;
-}
 
 .sync-note {
   padding: 8px 10px;

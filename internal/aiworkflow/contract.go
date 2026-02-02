@@ -12,11 +12,11 @@ import (
 )
 
 const (
-	defaultWorkflowVersion  = "v0.1"
-	defaultWorkflowName     = "draft-workflow"
-	defaultPlanMode         = "manual-approve"
-	defaultPlanStrategy     = "sequential"
-	maxWorkflowStepCount    = 20
+	defaultWorkflowVersion = "v0.1"
+	defaultWorkflowName    = "draft-workflow"
+	defaultPlanMode        = "manual-approve"
+	defaultPlanStrategy    = "sequential"
+	maxWorkflowStepCount   = 20
 )
 
 var allowedActionList = []string{
@@ -188,4 +188,25 @@ func forceManualApprove(yamlText string) (string, error) {
 	wf = normalizeWorkflow(wf)
 	wf.Plan.Mode = defaultPlanMode
 	return marshalWorkflowYAML(wf)
+}
+
+func validateSubPlan(fragment string, step PlanStep) error {
+	trimmed := strings.TrimSpace(fragment)
+	if trimmed == "" {
+		return errors.New("yaml fragment is empty")
+	}
+	for _, forbidden := range []string{"version:", "inventory:", "plan:"} {
+		for _, line := range strings.Split(trimmed, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), forbidden) {
+				return fmt.Errorf("sub plan must not include top-level %s", strings.TrimSuffix(forbidden, ":"))
+			}
+		}
+	}
+	if !strings.Contains(trimmed, "- name:") {
+		return errors.New("sub plan must include a step name")
+	}
+	if strings.TrimSpace(step.StepName) != "" && !strings.Contains(trimmed, step.StepName) {
+		return fmt.Errorf("sub plan must target step %q", step.StepName)
+	}
+	return nil
 }

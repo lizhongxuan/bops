@@ -7,6 +7,7 @@ import (
 
 	"bops/internal/ai"
 	"bops/internal/workflow"
+	"gopkg.in/yaml.v3"
 )
 
 func buildGeneratePrompt(prompt, contextText, baseYAML string) string {
@@ -16,20 +17,19 @@ func buildGeneratePrompt(prompt, contextText, baseYAML string) string {
 		builder.WriteString(contextText)
 		builder.WriteString("\n\n")
 	}
-	trimmedBase := strings.TrimSpace(baseYAML)
-	if trimmedBase != "" {
-		builder.WriteString("Existing workflow YAML:\n")
-		builder.WriteString(trimmedBase)
+	if stepsOnly := stepsOnlyYAML(baseYAML); stepsOnly != "" {
+		builder.WriteString("Existing steps YAML:\n")
+		builder.WriteString(stepsOnly)
 		builder.WriteString("\n\n")
-		builder.WriteString("Update the existing YAML based on the user request.\n")
-		builder.WriteString("Only modify the steps section. Do not change any other fields.\n")
+		builder.WriteString("Update the steps based on the user request.\n")
+		builder.WriteString("Only modify steps. Do not change other fields.\n")
 		builder.WriteString("If steps already exist, edit or append to them instead of creating a brand new workflow.\n\n")
 	}
 	builder.WriteString("User request:\n")
 	builder.WriteString(prompt)
 	builder.WriteString("\n\n")
 	builder.WriteString("Return JSON only with top-level keys: workflow, questions.\n")
-	builder.WriteString("workflow must include: version, name, description, inventory, plan, steps.\n")
+	builder.WriteString("workflow should only include steps. Other fields will be maintained by the system.\n")
 	builder.WriteString("Steps must include name/action/with and must not include targets.\n")
 	builder.WriteString("Allowed actions: ")
 	builder.WriteString(allowedActionText())
@@ -42,14 +42,18 @@ func buildGeneratePrompt(prompt, contextText, baseYAML string) string {
 func buildFixPrompt(yamlText string, issues []string, lastError string) string {
 	builder := strings.Builder{}
 	builder.WriteString("Fix the YAML below and return JSON only with top-level keys: workflow, questions.\n")
-	builder.WriteString("workflow must include: version, name, description, inventory, plan, steps.\n")
+	builder.WriteString("workflow should only include steps. Other fields will be maintained by the system.\n")
 	builder.WriteString("Steps must include name/action/with and must not include targets.\n")
-	builder.WriteString("Only modify steps. Do not change any other fields.\n")
+	builder.WriteString("Only modify steps. Do not change any other fields unless explicitly requested.\n")
 	builder.WriteString("Allowed actions: ")
 	builder.WriteString(allowedActionText())
 	builder.WriteString(".\n\n")
-	builder.WriteString("YAML:\n")
-	builder.WriteString(yamlText)
+	builder.WriteString("Steps YAML:\n")
+	if stepsOnly := stepsOnlyYAML(yamlText); stepsOnly != "" {
+		builder.WriteString(stepsOnly)
+	} else {
+		builder.WriteString("steps: []")
+	}
 	builder.WriteString("\n\n")
 	if len(issues) > 0 {
 		builder.WriteString("Issues:\n")
@@ -77,9 +81,9 @@ func buildLoopPrompt(prompt, contextText, baseYAML string, toolNames, toolHistor
 		builder.WriteString(contextText)
 		builder.WriteString("\n\n")
 	}
-	if trimmedBase := strings.TrimSpace(baseYAML); trimmedBase != "" {
-		builder.WriteString("已有 workflow YAML:\n")
-		builder.WriteString(trimmedBase)
+	if stepsOnly := stepsOnlyYAML(baseYAML); stepsOnly != "" {
+		builder.WriteString("已有 steps YAML:\n")
+		builder.WriteString(stepsOnly)
 		builder.WriteString("\n\n")
 		builder.WriteString("请只修改 steps, 其他字段保持不变。\n\n")
 	}
@@ -114,9 +118,8 @@ func buildLoopPrompt(prompt, contextText, baseYAML string, toolNames, toolHistor
 	builder.WriteString("- 每轮只允许一个 action。\n")
 	builder.WriteString("- tool_call 必须包含 tool 和 args。\n")
 	builder.WriteString("- need_more_info 必须包含 questions 数组。\n")
-	builder.WriteString("- final 必须包含 yaml 字段, 内容为完整 workflow YAML。\n")
+	builder.WriteString("- final 必须包含 yaml 字段, 内容可以只包含 steps。\n")
 	builder.WriteString("workflow YAML 约束:\n")
-	builder.WriteString("- 顶层字段必须包含 version, name, description, inventory, plan, steps。\n")
 	builder.WriteString("- steps 每项必须包含 name, action, with。\n")
 	builder.WriteString("- steps 不要包含 targets。\n")
 	builder.WriteString("- 只允许 action: ")
@@ -194,6 +197,29 @@ func mergeStepsIntoBase(baseYAML, updatedYAML string) string {
 	return out
 }
 
+func stepsOnlyYAML(yamlText string) string {
+	trimmed := strings.TrimSpace(yamlText)
+	if trimmed == "" {
+		return ""
+	}
+	wf, err := workflow.Load([]byte(trimmed))
+	if err != nil {
+		return ""
+	}
+	wf = normalizeWorkflow(wf)
+	if len(wf.Steps) == 0 {
+		return ""
+	}
+	envelope := struct {
+		Steps []workflow.Step `yaml:"steps"`
+	}{Steps: wf.Steps}
+	data, err := yaml.Marshal(envelope)
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
 func extractJSONBlock(text string) string {
 	if block := extractCodeBlock(text); block != "" {
 		text = block
@@ -242,5 +268,40 @@ func buildReviewPrompt(yamlText string, issues []string) string {
 	builder.WriteString("YAML:\n")
 	builder.WriteString(strings.TrimSpace(yamlText))
 	builder.WriteString("\n\nReturn JSON only.")
+	return builder.String()
+}
+
+func buildSubloopPrompt(step PlanStep, issues []string) string {
+	builder := strings.Builder{}
+	builder.WriteString("You are a workflow YAML coder. Return JSON only.\n")
+	builder.WriteString("Output format: {\"yaml_fragment\":\"...\"}.\n")
+	builder.WriteString("Only include YAML for the current step (as a steps list item).\n")
+	builder.WriteString("Do not include top-level keys like version/inventory/plan.\n\n")
+	builder.WriteString("Step:\n")
+	builder.WriteString("- id: ")
+	builder.WriteString(strings.TrimSpace(step.ID))
+	builder.WriteString("\n")
+	builder.WriteString("- name: ")
+	builder.WriteString(strings.TrimSpace(step.StepName))
+	builder.WriteString("\n")
+	if strings.TrimSpace(step.Description) != "" {
+		builder.WriteString("- description: ")
+		builder.WriteString(strings.TrimSpace(step.Description))
+		builder.WriteString("\n")
+	}
+	if len(step.Dependencies) > 0 {
+		builder.WriteString("- dependencies: ")
+		builder.WriteString(strings.Join(step.Dependencies, ", "))
+		builder.WriteString("\n")
+	}
+	if len(issues) > 0 {
+		builder.WriteString("\nKnown issues:\n")
+		for _, issue := range issues {
+			builder.WriteString("- ")
+			builder.WriteString(issue)
+			builder.WriteString("\n")
+		}
+	}
+	builder.WriteString("\nReturn JSON only.")
 	return builder.String()
 }

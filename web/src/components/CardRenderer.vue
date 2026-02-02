@@ -1,6 +1,9 @@
 <template>
   <div class="card-renderer">
     <FileCreateCard v-if="card.card_type === 'file_create'" :card="card as FileCreateCardPayload" />
+    <PlanStepCard v-else-if="card.card_type === 'plan_step'" :card="card as PlanStepCardPayload" />
+    <SubLoopCard v-else-if="card.card_type === 'subloop'" :card="card as SubLoopCardPayload" />
+    <YamlPatchCard v-else-if="card.card_type === 'yaml_patch'" :card="card as YamlPatchCardPayload" />
     <div v-else class="card fallback">
       <div class="card-title">未知卡片</div>
       <pre>{{ prettyCard }}</pre>
@@ -11,6 +14,9 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import FileCreateCard, { type FileCreateCardPayload } from "./cards/FileCreateCard.vue";
+import PlanStepCard, { type PlanStepCardPayload } from "./cards/PlanStepCard.vue";
+import SubLoopCard, { type SubLoopCardPayload } from "./cards/SubLoopCard.vue";
+import YamlPatchCard, { type YamlPatchCardPayload } from "./cards/YamlPatchCard.vue";
 
 export type CardPayload = {
   card_type?: string;
@@ -22,10 +28,28 @@ export type CardPayload = {
   risk_level?: string;
   issues?: unknown[];
   questions?: unknown[];
+  step_id?: string;
+  step_name?: string;
+  step_status?: string;
+  round?: number;
+  status?: string;
+  message?: string;
+  yaml_fragment?: string;
+  agent_name?: string;
+  agent_role?: string;
+  parent_step_id?: string;
+  event_type?: string;
   [key: string]: unknown;
 };
 
-const props = defineProps<{ card: CardPayload }>();
+export type CardPayloadUnion =
+  | FileCreateCardPayload
+  | PlanStepCardPayload
+  | SubLoopCardPayload
+  | YamlPatchCardPayload
+  | CardPayload;
+
+const props = defineProps<{ card: CardPayloadUnion }>();
 
 const prettyCard = computed(() => JSON.stringify(props.card, null, 2));
 </script>

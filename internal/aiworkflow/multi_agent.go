@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"bops/internal/ai"
+	"bops/internal/logging"
+	"go.uber.org/zap"
 )
 
 func (p *Pipeline) RunMultiAgent(ctx context.Context, prompt string, context map[string]any, specs []AgentSpec, opts RunOptions) (*State, error) {
@@ -15,6 +18,16 @@ func (p *Pipeline) RunMultiAgent(ctx context.Context, prompt string, context map
 		return p.RunAgent(ctx, prompt, context, opts)
 	}
 	mainSpec := normalizeAgentSpec(specs[0])
+	agentNames := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		agentNames = append(agentNames, normalizeAgentSpec(spec).Name)
+	}
+	started := time.Now()
+	logging.L().Info("multi-agent start",
+		zap.String("main_agent", mainSpec.Name),
+		zap.Strings("agents", agentNames),
+		zap.Int("prompt_len", len(prompt)),
+	)
 	mainOpts := opts
 	mainOpts.AgentSpec = mainSpec
 	var (
@@ -31,9 +44,20 @@ func (p *Pipeline) RunMultiAgent(ctx context.Context, prompt string, context map
 		err = runMain()
 	}
 	if err != nil {
+		logging.L().Error("multi-agent end",
+			zap.String("main_agent", mainSpec.Name),
+			zap.Strings("agents", agentNames),
+			zap.Error(err),
+			zap.Duration("elapsed", time.Since(started)),
+		)
 		return state, err
 	}
 	if len(specs) == 1 {
+		logging.L().Info("multi-agent end",
+			zap.String("main_agent", mainSpec.Name),
+			zap.Strings("agents", agentNames),
+			zap.Duration("elapsed", time.Since(started)),
+		)
 		return state, nil
 	}
 
@@ -175,6 +199,11 @@ func (p *Pipeline) RunMultiAgent(ctx context.Context, prompt string, context map
 	if len(summaries) > 0 {
 		state.SubagentSummaries = summaries
 	}
+	logging.L().Info("multi-agent end",
+		zap.String("main_agent", mainSpec.Name),
+		zap.Strings("agents", agentNames),
+		zap.Duration("elapsed", time.Since(started)),
+	)
 	return state, nil
 }
 
@@ -182,6 +211,13 @@ func (p *Pipeline) reviewYAML(ctx context.Context, yamlText string, spec AgentSp
 	if p == nil || p.cfg.Client == nil {
 		return nil, fmt.Errorf("ai client is not configured")
 	}
+	started := time.Now()
+	logging.L().Info("agent start",
+		zap.String("agent", spec.Name),
+		zap.String("role", spec.Role),
+		zap.String("mode", "review"),
+		zap.Int("yaml_len", len(yamlText)),
+	)
 	sink := wrapEventSinkWithAgent(opts.EventSink, normalizeAgentSpec(spec))
 	if sink != nil {
 		sink(Event{Node: "reviewer", Status: "start", Message: ""})
@@ -196,11 +232,34 @@ func (p *Pipeline) reviewYAML(ctx context.Context, yamlText string, spec AgentSp
 		if sink != nil {
 			sink(Event{Node: "reviewer", Status: "error", Message: err.Error()})
 		}
+		logging.L().Error("agent end",
+			zap.String("agent", spec.Name),
+			zap.String("role", spec.Role),
+			zap.String("mode", "review"),
+			zap.Error(err),
+			zap.Duration("elapsed", time.Since(started)),
+		)
 		return nil, err
 	}
 	issues, err := parseReviewJSON(reply)
 	if sink != nil {
 		sink(Event{Node: "reviewer", Status: "done", Message: fmt.Sprintf("issues=%d", len(issues))})
+	}
+	if err != nil {
+		logging.L().Error("agent end",
+			zap.String("agent", spec.Name),
+			zap.String("role", spec.Role),
+			zap.String("mode", "review"),
+			zap.Error(err),
+			zap.Duration("elapsed", time.Since(started)),
+		)
+	} else {
+		logging.L().Info("agent end",
+			zap.String("agent", spec.Name),
+			zap.String("role", spec.Role),
+			zap.String("mode", "review"),
+			zap.Duration("elapsed", time.Since(started)),
+		)
 	}
 	return issues, err
 }

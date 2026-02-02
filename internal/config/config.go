@@ -97,6 +97,7 @@ func Load(path string) (Config, error) {
 	if err := ApplyEnvOverrides(&cfg); err != nil {
 		return cfg, err
 	}
+	cfg.applyAgentDefaults()
 	if err := cfg.Validate(); err != nil {
 		return cfg, err
 	}
@@ -158,6 +159,29 @@ func (cfg *Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (cfg *Config) applyAgentDefaults() {
+	if cfg == nil {
+		return
+	}
+	for i := range cfg.Agents {
+		role := strings.TrimSpace(cfg.Agents[i].Role)
+		if role != "" {
+			continue
+		}
+		name := strings.ToLower(strings.TrimSpace(cfg.Agents[i].Name))
+		switch name {
+		case "architect", "coordinator", "planner":
+			cfg.Agents[i].Role = "architect"
+		case "coder", "developer", "engineer":
+			cfg.Agents[i].Role = "coder"
+		case "reviewer", "linter", "qa":
+			cfg.Agents[i].Role = "reviewer"
+		default:
+			cfg.Agents[i].Role = "agent"
+		}
+	}
 }
 
 func splitCommaList(raw string) []string {

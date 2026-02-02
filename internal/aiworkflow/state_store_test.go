@@ -38,7 +38,7 @@ steps:
       cmd: echo b
 `
 	store := NewStateStore(base)
-	if err := store.UpdateYAMLFragment(fragment); err != nil {
+	if err := store.UpdateYAMLFragment(fragment, ""); err != nil {
 		t.Fatalf("update fragment: %v", err)
 	}
 	snap := store.Snapshot()

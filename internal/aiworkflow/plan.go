@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"bops/internal/ai"
@@ -92,14 +93,25 @@ func parsePlanJSON(reply string) ([]PlanStep, error) {
 
 func normalizePlanSteps(steps []PlanStep) []PlanStep {
 	out := make([]PlanStep, 0, len(steps))
-	for _, step := range steps {
+	for i, step := range steps {
 		name := strings.TrimSpace(step.StepName)
 		if name == "" {
 			continue
 		}
+		stepID := strings.TrimSpace(step.ID)
+		if stepID == "" {
+			stepID = normalizePlanID(name, i)
+		}
+		status := step.Status
+		if status == "" {
+			status = StepStatusPending
+		}
 		next := PlanStep{
+			ID:          stepID,
 			StepName:    name,
 			Description: strings.TrimSpace(step.Description),
+			ParentID:    strings.TrimSpace(step.ParentID),
+			Status:      status,
 		}
 		for _, dep := range step.Dependencies {
 			trimmed := strings.TrimSpace(dep)
@@ -111,4 +123,26 @@ func normalizePlanSteps(steps []PlanStep) []PlanStep {
 		out = append(out, next)
 	}
 	return out
+}
+
+func normalizePlanID(name string, index int) string {
+	lower := strings.ToLower(strings.TrimSpace(name))
+	builder := strings.Builder{}
+	lastDash := false
+	for _, ch := range lower {
+		if (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') {
+			builder.WriteRune(ch)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			builder.WriteRune('-')
+			lastDash = true
+		}
+	}
+	id := strings.Trim(builder.String(), "-")
+	if id == "" {
+		return fmt.Sprintf("step-%d", index+1)
+	}
+	return id
 }

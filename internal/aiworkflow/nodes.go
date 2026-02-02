@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"bops/internal/ai"
 	"bops/internal/logging"
@@ -330,19 +331,43 @@ func (p *Pipeline) chatWithThought(ctx context.Context, messages []ai.Message, s
 	if p.cfg.Client == nil {
 		return "", "", errors.New("ai client is not configured")
 	}
+	started := time.Now()
+	logging.L().Info("llm prompt",
+		zap.Int("message_count", len(messages)),
+		zap.Any("messages", messages),
+	)
+	logResponse := func(reply, thought string, err error) {
+		if err != nil {
+			logging.L().Error("llm response error",
+				zap.Error(err),
+				zap.Duration("elapsed", time.Since(started)),
+			)
+			return
+		}
+		logging.L().Info("llm response",
+			zap.Int("reply_len", len(reply)),
+			zap.Int("thought_len", len(thought)),
+			zap.Duration("elapsed", time.Since(started)),
+		)
+	}
 	if sink != nil {
 		if client, ok := p.cfg.Client.(ai.StreamClient); ok {
-			return client.ChatStream(ctx, messages, func(delta ai.StreamDelta) {
+			reply, thought, err := client.ChatStream(ctx, messages, func(delta ai.StreamDelta) {
 				if sink != nil {
 					sink(delta)
 				}
 			})
+			logResponse(reply, thought, err)
+			return reply, thought, err
 		}
 	}
 	if client, ok := p.cfg.Client.(ai.ThoughtClient); ok {
-		return client.ChatWithThought(ctx, messages)
+		reply, thought, err := client.ChatWithThought(ctx, messages)
+		logResponse(reply, thought, err)
+		return reply, thought, err
 	}
 	reply, err := p.cfg.Client.Chat(ctx, messages)
+	logResponse(reply, "", err)
 	return reply, "", err
 }
 

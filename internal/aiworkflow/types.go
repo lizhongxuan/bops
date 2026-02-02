@@ -62,6 +62,8 @@ type State struct {
 	StreamSink        StreamSink
 	LoopMetrics       *LoopMetrics
 	Plan              []PlanStep
+	CurrentStepID     string
+	StepStatuses      map[string]StepStatus
 	SubagentSummaries []AgentSummary
 }
 
@@ -102,10 +104,22 @@ type AgentSummary struct {
 }
 
 type PlanStep struct {
-	StepName     string   `json:"step_name"`
-	Description  string   `json:"description,omitempty"`
-	Dependencies []string `json:"dependencies,omitempty"`
+	ID           string     `json:"id,omitempty"`
+	StepName     string     `json:"step_name"`
+	Description  string     `json:"description,omitempty"`
+	Dependencies []string   `json:"dependencies,omitempty"`
+	ParentID     string     `json:"parent_id,omitempty"`
+	Status       StepStatus `json:"status,omitempty"`
 }
+
+type StepStatus string
+
+const (
+	StepStatusPending    StepStatus = "pending"
+	StepStatusInProgress StepStatus = "in_progress"
+	StepStatusDone       StepStatus = "done"
+	StepStatusFailed     StepStatus = "failed"
+)
 
 type LoopMetrics struct {
 	LoopID       string
@@ -125,6 +139,8 @@ type Event struct {
 	AgentID             string         `json:"agent_id,omitempty"`
 	AgentName           string         `json:"agent_name,omitempty"`
 	AgentRole           string         `json:"agent_role,omitempty"`
+	EventType           string         `json:"event_type,omitempty"`
+	ParentStepID        string         `json:"parent_step_id,omitempty"`
 	LoopID              string         `json:"loop_id,omitempty"`
 	Iteration           int            `json:"iteration,omitempty"`
 	AgentStatus         string         `json:"agent_status,omitempty"`
