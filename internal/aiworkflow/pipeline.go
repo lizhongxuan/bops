@@ -13,6 +13,8 @@ type Pipeline struct {
 	cfg            Config
 	generateRunner compose.Runnable[*State, *State]
 	fixRunner      compose.Runnable[*State, *State]
+	sessionLane    *SessionLane
+	globalLane     *GlobalLane
 }
 
 func New(cfg Config) (*Pipeline, error) {
@@ -22,7 +24,11 @@ func New(cfg Config) (*Pipeline, error) {
 	if cfg.MaxRetries <= 0 {
 		cfg.MaxRetries = 2
 	}
-	p := &Pipeline{cfg: cfg}
+	p := &Pipeline{
+		cfg:         cfg,
+		sessionLane: NewSessionLane(),
+		globalLane:  NewGlobalLane(defaultGlobalLaneConcurrency),
+	}
 	gen, err := p.buildGenerateGraph()
 	if err != nil {
 		return nil, err
@@ -107,6 +113,9 @@ func (p *Pipeline) buildGenerateGraph() (compose.Runnable[*State, *State], error
 	if err := graph.AddLambdaNode("intent_extract", compose.InvokableLambda(p.intentExtract)); err != nil {
 		return nil, err
 	}
+	if err := graph.AddLambdaNode("planner", compose.InvokableLambda(p.plan)); err != nil {
+		return nil, err
+	}
 	if err := graph.AddLambdaNode("question_gate", compose.InvokableLambda(p.questionGate)); err != nil {
 		return nil, err
 	}
@@ -138,7 +147,10 @@ func (p *Pipeline) buildGenerateGraph() (compose.Runnable[*State, *State], error
 	if err := graph.AddEdge("normalize", "intent_extract"); err != nil {
 		return nil, err
 	}
-	if err := graph.AddEdge("intent_extract", "question_gate"); err != nil {
+	if err := graph.AddEdge("intent_extract", "planner"); err != nil {
+		return nil, err
+	}
+	if err := graph.AddEdge("planner", "question_gate"); err != nil {
 		return nil, err
 	}
 

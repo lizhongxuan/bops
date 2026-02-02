@@ -17,6 +17,9 @@
             <li v-for="entry in timelineEntries" :key="entry.id" :class="['timeline-item', entry.type]">
               <div v-if="entry.type !== 'ui' && entry.type !== 'card'" class="timeline-header">
                 <span class="timeline-badge" :class="entry.type">{{ entry.label }}</span>
+                <small v-if="entry.agentName || entry.agentRole" class="agent-tag">
+                  {{ entry.agentName || 'agent' }}<span v-if="entry.agentRole"> · {{ entry.agentRole }}</span>
+                </small>
                 <small v-if="entry.extra">{{ entry.extra }}</small>
               </div>
               <div v-if="entry.type === 'function_call'" class="function-call-card">
@@ -169,39 +172,6 @@
             校验与执行
           </button>
         </div>
-        <div class="workspace-toolbar">
-          <div class="sync-controls">
-            <span class="sync-label">同步</span>
-            <button
-              class="toggle-btn"
-              type="button"
-              :class="autoSync ? 'on' : 'off'"
-              @click="toggleAutoSync"
-            >
-              {{ autoSync ? '自动同步' : '同步关闭' }}
-            </button>
-            <button v-if="!autoSync && visualDirty" class="btn btn-sm" type="button" @click="applyVisualToYaml">
-              应用到 YAML
-            </button>
-            <button v-if="!autoSync && yamlDirty" class="btn btn-sm" type="button" @click="syncVisualFromYaml">
-              从 YAML 更新
-            </button>
-            <span v-if="!autoSync && visualDirty" class="sync-tag warn">视觉未同步</span>
-            <span v-if="!autoSync && yamlDirty" class="sync-tag warn">YAML 已更新</span>
-          </div>
-          <button
-            class="btn ghost btn-sm"
-            type="button"
-            :disabled="!historyTimeline.length"
-            @click="showHistoryModal = true"
-          >
-            草稿历史
-          </button>
-          <div class="status-tag" :class="validation.ok ? 'ok' : 'warn'">
-            {{ validation.ok ? '校验通过' : '待修复' }}
-          </div>
-        </div>
-
         <div v-if="workspaceTab === 'visual'" class="tab-panel">
           <div class="visual-grid">
             <div class="steps-section">
@@ -213,15 +183,6 @@
                 </div>
                 <div class="steps-head-right">
                   <span class="step-count">{{ steps.length }} 步</span>
-                  <select v-model="newStepAction" class="step-action-select">
-                    <option value="cmd.run">cmd.run</option>
-                    <option value="pkg.install">pkg.install</option>
-                    <option value="template.render">template.render</option>
-                    <option value="service.ensure">service.ensure</option>
-                    <option value="script.shell">script.shell</option>
-                    <option value="script.python">script.python</option>
-                    <option value="env.set">env.set</option>
-                  </select>
                 </div>
               </div>
               <div v-if="steps.length" class="steps-list" ref="stepsListRef">
@@ -336,6 +297,29 @@
               <div class="status" :class="evt.status">{{ evt.status }}</div>
               <div class="message" v-if="evt.message">{{ evt.message }}</div>
             </div>
+          </div>
+
+          <div v-if="loopMetrics" class="loop-metrics">
+            <div class="metrics-title">Loop 运行信息</div>
+            <div class="metrics-grid">
+              <div class="metric">
+                <span class="label">轮次</span>
+                <span class="value">{{ loopMetrics.iterations ?? "-" }}</span>
+              </div>
+              <div class="metric">
+                <span class="label">工具调用</span>
+                <span class="value">{{ loopMetrics.toolCalls ?? "-" }}</span>
+              </div>
+              <div class="metric">
+                <span class="label">成功率</span>
+                <span class="value">{{ loopSuccessRate }}</span>
+              </div>
+              <div class="metric">
+                <span class="label">耗时</span>
+                <span class="value">{{ loopDurationLabel }}</span>
+              </div>
+            </div>
+            <div v-if="loopMetrics.loopId" class="metrics-foot">loop_id: {{ loopMetrics.loopId }}</div>
           </div>
 
           <div v-if="executeResult" class="execution-result" :class="executeResult.status">
@@ -687,6 +671,9 @@ type ChatEntry = {
   replyId?: string;
   cardId?: string;
   extra?: string;
+  agentId?: string;
+  agentName?: string;
+  agentRole?: string;
   action?: "fix";
   actionLabel?: string;
   resource?: UIResourceBody | null;
@@ -709,6 +696,12 @@ type StreamMessage = {
     plugin_status?: string;
     message_title?: string;
     stream_plugin_running?: string;
+    loop_id?: string;
+    iteration?: number;
+    agent_status?: string;
+    agent_id?: string;
+    agent_name?: string;
+    agent_role?: string;
   };
 };
 
@@ -754,6 +747,14 @@ type SummaryState = {
   needsReview: boolean;
 };
 
+type LoopMetrics = {
+  loopId?: string;
+  iterations?: number;
+  toolCalls?: number;
+  toolFailures?: number;
+  durationMs?: number;
+};
+
 type SummaryResponse = {
   summary?: string;
   steps?: number;
@@ -772,6 +773,8 @@ type AISettingsResponse = {
   ai_base_url?: string;
   ai_model?: string;
   configured?: boolean;
+  default_agent?: string;
+  default_agents?: string[];
 };
 
 type HistoryEntry = {
@@ -839,6 +842,7 @@ const summary = ref<SummaryState>({
   issues: [],
   needsReview: false
 });
+const loopMetrics = ref<LoopMetrics | null>(null);
 const questionOverrides = ref<string[]>([]);
 const humanConfirmed = ref(false);
 const confirmReason = ref("");
@@ -854,6 +858,8 @@ const envPackageOptions = ref<EnvPackageSummary[]>([]);
 const selectedEnvPackages = ref<string[]>([]);
 const showEnvPackageModal = ref(false);
 const envPackageDraft = ref<string[]>([]);
+const defaultAgent = ref("");
+const defaultAgents = ref<string[]>([]);
 const showValidationEnvModal = ref(false);
 const validationEnvDraft = ref("");
 const executeEnabled = ref(false);
@@ -917,6 +923,21 @@ const chatGroups = computed<ChatGroup[]>(() => {
 });
 const timelineEntries = computed(() => chatGroups.value.flatMap((group) => group.entries));
 const requiresReason = computed(() => summary.value.riskLevel === "high");
+const loopSuccessRate = computed(() => {
+  if (!loopMetrics.value) return "-";
+  const calls = loopMetrics.value.toolCalls ?? 0;
+  const failures = loopMetrics.value.toolFailures ?? 0;
+  if (calls <= 0) return "-";
+  const success = Math.max(calls - failures, 0);
+  return `${Math.round((success / calls) * 100)}%`;
+});
+const loopDurationLabel = computed(() => {
+  if (!loopMetrics.value) return "-";
+  const durationMs = loopMetrics.value.durationMs ?? 0;
+  if (!durationMs) return "-";
+  if (durationMs < 1000) return `${durationMs}ms`;
+  return `${(durationMs / 1000).toFixed(1)}s`;
+});
 const requiresConfirm = computed(() => {
   if (!summary.value.needsReview) return false;
   if (!humanConfirmed.value) return true;
@@ -1132,12 +1153,18 @@ async function loadAIConfig() {
       provider: data.ai_provider || "",
       apiKeySet: Boolean(data.ai_api_key_set)
     };
+    defaultAgent.value = (data.default_agent || "").trim();
+    defaultAgents.value = Array.isArray(data.default_agents)
+      ? data.default_agents.filter((name) => typeof name === "string" && name.trim()).map((name) => name.trim())
+      : [];
   } catch (err) {
     aiConfig.value = {
       configured: false,
       provider: "",
       apiKeySet: false
     };
+    defaultAgent.value = "";
+    defaultAgents.value = [];
   }
 }
 
@@ -1172,6 +1199,7 @@ function resetStreamState() {
   activeNodes.value = [];
   functionCallEntryIds.value = {};
   functionCallStreamEntryIds.value = {};
+  loopMetrics.value = null;
   refreshActiveStatus();
 }
 
@@ -1197,6 +1225,15 @@ function handleFunctionCallMessage(msg: StreamMessage) {
     currentReplyId.value = msg.reply_id;
   }
   const callId = msg.extra_info?.call_id || msg.message_id || `call-${Date.now()}`;
+  const loopId = msg.extra_info?.loop_id || "";
+  const iteration = typeof msg.extra_info?.iteration === "number" ? msg.extra_info.iteration : undefined;
+  const agentStatus = msg.extra_info?.agent_status || "";
+  const agentId = msg.extra_info?.agent_id || "";
+  const agentName = msg.extra_info?.agent_name || agentId;
+  const agentRole = msg.extra_info?.agent_role || "";
+  const agentKey = agentId || agentName || "agent";
+  const baseKey = loopId && iteration ? `loop:${loopId}:${iteration}` : callId;
+  const groupKey = `${agentKey}:${baseKey}`;
   const isFinish = typeof msg.is_finish === "boolean" ? msg.is_finish : msg.type !== "function_call";
   const isRunning = msg.type === "function_call" || (msg.type === "tool_response" && !isFinish);
   const failed = msg.extra_info?.plugin_status === "1";
@@ -1212,31 +1249,44 @@ function handleFunctionCallMessage(msg: StreamMessage) {
     status,
     content: msg.content,
     index,
-    streamUuid: streamUuid || undefined
+    streamUuid: streamUuid || undefined,
+    loopId: loopId || undefined,
+    iteration,
+    agentStatus: agentStatus || undefined,
+    agentId: agentId || undefined,
+    agentName: agentName || undefined,
+    agentRole: agentRole || undefined
   };
   const replyId = msg.reply_id || currentReplyId.value || "";
-  const entryId = functionCallEntryIds.value[callId];
+  const entryId = functionCallEntryIds.value[groupKey];
   if (entryId) {
     updateChatEntry(entryId, (entry) => ({
       ...entry,
       replyId,
-      functionCalls: [nextUnit],
-      body: ""
+      functionCalls: mergeFunctionCalls(entry.functionCalls, nextUnit),
+      body: "",
+      agentId: entry.agentId || agentId,
+      agentName: entry.agentName || agentName,
+      agentRole: entry.agentRole || agentRole
     }));
     if (streamUuid) {
       functionCallStreamEntryIds.value = { ...functionCallStreamEntryIds.value, [streamUuid]: entryId };
     }
     return;
   }
+  const label = iteration ? `第 ${iteration} 轮` : "步骤";
   const newId = pushChatEntry({
-    label: "步骤",
+    label,
     body: "",
     type: "function_call",
     extra: "STEP",
     replyId,
-    functionCalls: [nextUnit]
+    functionCalls: [nextUnit],
+    agentId: agentId || undefined,
+    agentName: agentName || undefined,
+    agentRole: agentRole || undefined
   });
-  functionCallEntryIds.value = { ...functionCallEntryIds.value, [callId]: newId };
+  functionCallEntryIds.value = { ...functionCallEntryIds.value, [groupKey]: newId };
   if (streamUuid) {
     functionCallStreamEntryIds.value = { ...functionCallStreamEntryIds.value, [streamUuid]: newId };
   }
@@ -1267,20 +1317,41 @@ function handleVerboseMessage(msg: StreamMessage) {
   const entryId = functionCallStreamEntryIds.value[streamUuid];
   if (!entryId) return;
   updateChatEntry(entryId, (entry) => {
-    const unit = entry.functionCalls?.[0];
+    const existing = entry.functionCalls ? [...entry.functionCalls] : [];
+    const unitIndex = existing.findIndex((item) => item.streamUuid === streamUuid);
+    const unit = unitIndex >= 0 ? existing[unitIndex] : existing[0];
     const nextUnit: FunctionCallUnit = {
       callId: unit?.callId || streamUuid,
       title: unit?.title || streamUuid,
       status: "done",
       content: dataObj?.tool_output_content || unit?.content || msg.content,
       index: unit?.index,
-      streamUuid
+      streamUuid,
+      loopId: unit?.loopId,
+      iteration: unit?.iteration,
+      agentStatus: unit?.agentStatus
     };
+    if (unitIndex >= 0) {
+      existing[unitIndex] = nextUnit;
+    } else {
+      existing.push(nextUnit);
+    }
     return {
       ...entry,
-      functionCalls: [nextUnit]
+      functionCalls: existing
     };
   });
+}
+
+function mergeFunctionCalls(items: FunctionCallUnit[] | undefined, nextUnit: FunctionCallUnit) {
+  const existing = items ? [...items] : [];
+  const index = existing.findIndex((item) => item.callId === nextUnit.callId);
+  if (index >= 0) {
+    existing[index] = nextUnit;
+    return existing;
+  }
+  existing.push(nextUnit);
+  return existing;
 }
 
 function markResponding() {
@@ -1803,34 +1874,6 @@ function applyVisualToYaml() {
   yaml.value = visualYaml.value;
   visualDirty.value = false;
   yamlDirty.value = false;
-}
-
-function syncVisualFromYaml() {
-  visualYaml.value = yaml.value;
-  visualDirty.value = false;
-  yamlDirty.value = false;
-  selectedStepIndex.value = null;
-}
-
-function toggleAutoSync() {
-  if (autoSync.value) {
-    autoSync.value = false;
-    visualYaml.value = yaml.value;
-    visualDirty.value = false;
-    yamlDirty.value = false;
-    return;
-  }
-  if (visualDirty.value) {
-    const useVisual = window.confirm("可视化有未同步修改，是否应用到 YAML？");
-    if (useVisual) {
-      applyVisualToYaml();
-    } else {
-      syncVisualFromYaml();
-    }
-  } else if (yamlDirty.value) {
-    syncVisualFromYaml();
-  }
-  autoSync.value = true;
 }
 
 function ensureYamlSynced() {
@@ -2850,8 +2893,18 @@ async function startStreamWithMessage(message: string, options: { clearPrompt?: 
   executeResult.value = null;
   const currentYaml = stripTargetsFromYaml(getVisualYaml()).trim();
   const baseYaml = steps.value.length ? currentYaml : "";
+  let agentName = defaultAgent.value;
+  let agents = defaultAgents.value.filter((name) => name && name !== agentName);
+  if (!agentName && agents.length) {
+    agentName = agents[0];
+    agents = agents.slice(1);
+  }
+  const agentMode = agents.length ? "multi" : "loop";
   const payload = {
     mode: "generate",
+    agent_mode: agentMode,
+    agent_name: agentName || undefined,
+    agents: agents.length ? agents : undefined,
     prompt: trimmed,
     context: buildContext(),
     env: selectedValidationEnv.value || undefined,
@@ -3037,6 +3090,42 @@ function applyResult(payload: Record<string, unknown>): StreamReply | null {
     const cleaned = stripTargetsFromYaml(nextYaml);
     applyAIGeneratedYaml(cleaned);
   }
+  const planSteps = Array.isArray(payload.plan) ? payload.plan : [];
+  if (planSteps.length) {
+    const lines = planSteps
+      .map((step, index) => {
+        const item = step as Record<string, unknown>;
+        const name = typeof item.step_name === "string" ? item.step_name : `step-${index + 1}`;
+        const desc = typeof item.description === "string" ? item.description : "";
+        const deps = Array.isArray(item.dependencies) ? item.dependencies.filter((d) => typeof d === "string") : [];
+        const depText = deps.length ? ` (依赖: ${deps.join(", ")})` : "";
+        return `${index + 1}. ${name}${desc ? ` - ${desc}` : ""}${depText}`;
+      })
+      .join("\n");
+    pushChatEntry({
+      label: "计划",
+      body: lines,
+      type: "ai",
+      extra: "PLAN"
+    });
+  }
+  const summaries = Array.isArray(payload.subagent_summaries) ? payload.subagent_summaries : [];
+  if (summaries.length) {
+    const lines = summaries
+      .map((item) => {
+        const entry = item as Record<string, unknown>;
+        const name = typeof entry.agent_name === "string" ? entry.agent_name : "agent";
+        const summary = typeof entry.summary === "string" ? entry.summary : "";
+        return `- ${name}${summary ? `: ${summary}` : ""}`;
+      })
+      .join("\n");
+    pushChatEntry({
+      label: "子 Agent 汇总",
+      body: lines,
+      type: "ai",
+      extra: "AGENTS"
+    });
+  }
   const questions = normalizeQuestions(payload.questions);
   questionOverrides.value = questions;
   streamStatus.value = "";
@@ -3044,6 +3133,18 @@ function applyResult(payload: Record<string, unknown>): StreamReply | null {
   chatPending.value = false;
   if (typeof payload.summary === "string") {
     summary.value.summary = payload.summary;
+  }
+  const metricsPayload = payload.loop_metrics as Record<string, unknown> | undefined;
+  if (metricsPayload && typeof metricsPayload === "object") {
+    loopMetrics.value = {
+      loopId: typeof metricsPayload.loop_id === "string" ? metricsPayload.loop_id : undefined,
+      iterations: typeof metricsPayload.iterations === "number" ? metricsPayload.iterations : undefined,
+      toolCalls: typeof metricsPayload.tool_calls === "number" ? metricsPayload.tool_calls : undefined,
+      toolFailures: typeof metricsPayload.tool_failures === "number" ? metricsPayload.tool_failures : undefined,
+      durationMs: typeof metricsPayload.duration_ms === "number" ? metricsPayload.duration_ms : undefined
+    };
+  } else {
+    loopMetrics.value = null;
   }
   summary.value.riskLevel = String(payload.risk_level || "");
   summary.value.needsReview = Boolean(payload.needs_review);
@@ -3237,6 +3338,7 @@ async function runFix() {
   });
   const payload = {
     mode: "fix",
+    agent_mode: "pipeline",
     yaml: yaml.value,
     issues,
     context: buildContext(),
@@ -3678,6 +3780,14 @@ function diffSummary(prev: string, next: string) {
   gap: 8px;
 }
 
+.agent-tag {
+  font-size: 11px;
+  color: var(--muted);
+  background: rgba(86, 98, 114, 0.1);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
 .timeline-badge {
   padding: 2px 10px;
   border-radius: 999px;
@@ -3978,18 +4088,6 @@ textarea {
   overflow: auto;
 }
 
-.workspace-toolbar {
-  display: flex;
-  gap: 8px;
-  align-items: center;
-  flex-wrap: wrap;
-  justify-content: space-between;
-}
-
-.workspace-toolbar .status-tag {
-  margin-left: auto;
-}
-
 .requirement-card {
   background: rgba(255, 255, 255, 0.7);
   border-radius: 16px;
@@ -4073,10 +4171,6 @@ textarea {
 
 .steps-head-right {
   justify-content: flex-end;
-}
-
-.step-action-select {
-  min-width: 140px;
 }
 
 .step-count {
@@ -4373,6 +4467,50 @@ textarea {
 
 .progress-item .status.done {
   color: var(--ok);
+}
+
+.loop-metrics {
+  border-radius: 12px;
+  border: 1px solid rgba(27, 27, 27, 0.12);
+  background: #fff;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.metrics-title {
+  font-weight: 600;
+}
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.metric {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(27, 27, 27, 0.04);
+}
+
+.metric .label {
+  color: var(--muted);
+}
+
+.metric .value {
+  font-weight: 600;
+}
+
+.metrics-foot {
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .execution-result {

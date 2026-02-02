@@ -52,11 +52,12 @@ type mcpContent struct {
 }
 
 type MCPClient struct {
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout *bufio.Reader
-	mu     sync.Mutex
-	nextID int
+	cmd     *exec.Cmd
+	stdin   io.WriteCloser
+	stdout  *bufio.Reader
+	mu      sync.Mutex
+	nextID  int
+	pending map[int]chan responseResult
 }
 
 func NewMCPClient(ctx context.Context, command string, args []string, workDir string) (*MCPClient, error) {
@@ -77,11 +78,13 @@ func NewMCPClient(ctx context.Context, command string, args []string, workDir st
 		return nil, err
 	}
 	client := &MCPClient{
-		cmd:    cmd,
-		stdin:  stdin,
-		stdout: bufio.NewReader(stdout),
-		nextID: 1,
+		cmd:     cmd,
+		stdin:   stdin,
+		stdout:  bufio.NewReader(stdout),
+		nextID:  1,
+		pending: make(map[int]chan responseResult),
 	}
+	go client.readLoop()
 	if err := client.initialize(); err != nil {
 		_ = client.Close()
 		return nil, err
@@ -93,6 +96,7 @@ func (c *MCPClient) Close() error {
 	if c == nil {
 		return nil
 	}
+	c.failPending(fmt.Errorf("mcp client closed"))
 	if c.stdin != nil {
 		_ = c.stdin.Close()
 	}
@@ -111,24 +115,56 @@ func (c *MCPClient) ListTools(ctx context.Context) ([]MCPToolDefinition, error) 
 }
 
 func (c *MCPClient) CallTool(ctx context.Context, name string, args map[string]any) (string, error) {
+	return c.callToolWithRetry(ctx, name, args, 1)
+}
+
+func (c *MCPClient) callToolWithRetry(ctx context.Context, name string, args map[string]any, retries int) (string, error) {
 	payload := map[string]any{
 		"name":      name,
 		"arguments": args,
 	}
-	var result mcpCallResult
-	if err := c.call(ctx, "tools/call", payload, &result); err != nil {
-		return "", err
-	}
-	if result.IsError {
-		return "", fmt.Errorf("tool call failed: %s", name)
-	}
-	var buf bytes.Buffer
-	for _, item := range result.Content {
-		if item.Type == "text" {
-			buf.WriteString(item.Text)
+	var lastErr error
+	attempts := retries + 1
+	for i := 0; i < attempts; i++ {
+		attemptCtx := ctx
+		cancel := func() {}
+		if _, ok := ctx.Deadline(); !ok {
+			attemptCtx, cancel = context.WithTimeout(ctx, 45*time.Second)
 		}
+		var result mcpCallResult
+		err := c.call(attemptCtx, "tools/call", payload, &result)
+		cancel()
+		if err != nil {
+			lastErr = err
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
+			if i < retries {
+				time.Sleep(time.Duration(200*(i+1)) * time.Millisecond)
+				continue
+			}
+			return "", err
+		}
+		if result.IsError {
+			lastErr = fmt.Errorf("tool call failed: %s", name)
+			if i < retries {
+				time.Sleep(time.Duration(200*(i+1)) * time.Millisecond)
+				continue
+			}
+			return "", lastErr
+		}
+		var buf bytes.Buffer
+		for _, item := range result.Content {
+			if item.Type == "text" {
+				buf.WriteString(item.Text)
+			}
+		}
+		return buf.String(), nil
 	}
-	return buf.String(), nil
+	if lastErr == nil {
+		lastErr = fmt.Errorf("tool call failed: %s", name)
+	}
+	return "", lastErr
 }
 
 func (c *MCPClient) initialize() error {
@@ -156,6 +192,11 @@ func (c *MCPClient) call(ctx context.Context, method string, params any, out any
 	c.mu.Lock()
 	id := c.nextID
 	c.nextID++
+	ch := make(chan responseResult, 1)
+	if c.pending == nil {
+		c.pending = make(map[int]chan responseResult)
+	}
+	c.pending[id] = ch
 	c.mu.Unlock()
 
 	req := mcpRequest{
@@ -165,9 +206,10 @@ func (c *MCPClient) call(ctx context.Context, method string, params any, out any
 		Params:  params,
 	}
 	if err := c.send(req); err != nil {
+		c.removePending(id)
 		return err
 	}
-	resp, err := c.readResponse(ctx, id)
+	resp, err := c.waitResponse(ctx, id, ch)
 	if err != nil {
 		return err
 	}
@@ -199,14 +241,30 @@ func (c *MCPClient) send(req mcpRequest) error {
 	return err
 }
 
-func (c *MCPClient) readResponse(ctx context.Context, id int) (*mcpResponse, error) {
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil, err
+type responseResult struct {
+	resp *mcpResponse
+	err  error
+}
+
+func (c *MCPClient) waitResponse(ctx context.Context, id int, ch chan responseResult) (*mcpResponse, error) {
+	defer c.removePending(id)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case result, ok := <-ch:
+		if !ok {
+			return nil, fmt.Errorf("mcp response channel closed")
 		}
+		return result.resp, result.err
+	}
+}
+
+func (c *MCPClient) readLoop() {
+	for {
 		line, err := c.stdout.ReadBytes('\n')
 		if err != nil {
-			return nil, err
+			c.failPending(err)
+			return
 		}
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
@@ -219,8 +277,42 @@ func (c *MCPClient) readResponse(ctx context.Context, id int) (*mcpResponse, err
 		if resp.ID == 0 {
 			continue
 		}
-		if resp.ID == id {
-			return &resp, nil
-		}
+		c.dispatchResponse(resp)
+	}
+}
+
+func (c *MCPClient) dispatchResponse(resp mcpResponse) {
+	c.mu.Lock()
+	ch := c.pending[resp.ID]
+	if ch != nil {
+		delete(c.pending, resp.ID)
+	}
+	c.mu.Unlock()
+	if ch == nil {
+		return
+	}
+	ch <- responseResult{resp: &resp}
+	close(ch)
+}
+
+func (c *MCPClient) removePending(id int) {
+	c.mu.Lock()
+	if c.pending != nil {
+		delete(c.pending, id)
+	}
+	c.mu.Unlock()
+}
+
+func (c *MCPClient) failPending(err error) {
+	c.mu.Lock()
+	pending := c.pending
+	c.pending = make(map[int]chan responseResult)
+	c.mu.Unlock()
+	if pending == nil {
+		return
+	}
+	for _, ch := range pending {
+		ch <- responseResult{err: err}
+		close(ch)
 	}
 }

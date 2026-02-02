@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"bops/internal/logging"
 	"go.uber.org/zap"
@@ -26,10 +27,12 @@ type StreamClient interface {
 }
 
 type Config struct {
-	Provider string
-	APIKey   string
-	BaseURL  string
-	Model    string
+	Provider      string
+	APIKey        string
+	BaseURL       string
+	Model         string
+	PlannerModel  string
+	ExecutorModel string
 }
 
 func NewClient(cfg Config) (Client, error) {
@@ -38,6 +41,45 @@ func NewClient(cfg Config) (Client, error) {
 		zap.String("base_url", cfg.BaseURL),
 		zap.String("model", cfg.Model),
 	)
+	if strings.TrimSpace(cfg.Provider) == "" || cfg.Provider == "none" {
+		return nil, fmt.Errorf("ai provider is not configured")
+	}
+
+	if strings.TrimSpace(cfg.PlannerModel) == "" && strings.TrimSpace(cfg.ExecutorModel) == "" {
+		return newProviderClient(cfg)
+	}
+
+	baseClient, err := newProviderClient(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	plannerCfg := cfg
+	if strings.TrimSpace(cfg.PlannerModel) != "" {
+		plannerCfg.Model = cfg.PlannerModel
+	}
+	executorCfg := cfg
+	if strings.TrimSpace(cfg.ExecutorModel) != "" {
+		executorCfg.Model = cfg.ExecutorModel
+	}
+
+	plannerClient, err := newProviderClient(plannerCfg)
+	if err != nil {
+		return nil, err
+	}
+	executorClient, err := newProviderClient(executorCfg)
+	if err != nil {
+		return nil, err
+	}
+
+	defaultClient := baseClient
+	if strings.TrimSpace(cfg.ExecutorModel) != "" {
+		defaultClient = executorClient
+	}
+	return NewRoutedClient(defaultClient, plannerClient, executorClient), nil
+}
+
+func newProviderClient(cfg Config) (Client, error) {
 	switch cfg.Provider {
 	case "", "none":
 		return nil, fmt.Errorf("ai provider is not configured")

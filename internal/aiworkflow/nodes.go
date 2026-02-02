@@ -289,6 +289,9 @@ func emitEventWithData(state *State, node, status, message string, data map[stri
 		CallID:              node,
 		DisplayName:         displayName,
 		Stage:               status,
+		AgentID:             state.AgentID,
+		AgentName:           state.AgentName,
+		AgentRole:           state.AgentRole,
 		StreamPluginRunning: streamPluginRunning,
 		Data:                data,
 	})
@@ -300,6 +303,8 @@ func mapNodeDisplayName(node string) string {
 		return "规范化输入"
 	case "intent_extract":
 		return "意图解析"
+	case "planner":
+		return "生成计划"
 	case "question_gate":
 		return "问题补全"
 	case "generator":

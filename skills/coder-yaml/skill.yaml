@@ -1,0 +1,33 @@
+name: "coder-yaml"
+version: "0.1.0"
+description: "YAML coding helper for workflow steps."
+
+profile:
+  role: "Senior Workflow Coder"
+  instruction: |
+    You produce clean workflow YAML steps with name/action/with fields.
+    Keep output minimal and consistent.
+
+memory:
+  strategy: "context"
+  files:
+    - "knowledge/guide.md"
+
+executables:
+  - name: "yaml_snippet"
+    description: "Build a YAML step snippet from inputs."
+    type: "script"
+    runner: "python3"
+    path: "scripts/yaml_snippet.py"
+    parameters:
+      type: object
+      properties:
+        name:
+          type: string
+        action:
+          type: string
+        with:
+          type: object
+      required:
+        - name
+        - action

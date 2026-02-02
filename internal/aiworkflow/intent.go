@@ -13,13 +13,24 @@ import (
 )
 
 type Intent struct {
-	Goal        string   `json:"goal"`
-	Targets     []string `json:"targets"`
-	Constraints []string `json:"constraints"`
-	Resources   []string `json:"resources"`
-	Actions     []string `json:"actions"`
-	Missing     []string `json:"missing"`
+	Type        IntentType `json:"intent_type,omitempty"`
+	Goal        string     `json:"goal"`
+	Targets     []string   `json:"targets"`
+	Constraints []string   `json:"constraints"`
+	Resources   []string   `json:"resources"`
+	Actions     []string   `json:"actions"`
+	Missing     []string   `json:"missing"`
 }
+
+type IntentType string
+
+const (
+	IntentExplain  IntentType = "explain"
+	IntentDebug    IntentType = "debug"
+	IntentOptimize IntentType = "optimize"
+	IntentSimulate IntentType = "simulate"
+	IntentMigrate  IntentType = "migrate"
+)
 
 const intentSystemPrompt = "You are a workflow intent extractor. Return JSON only."
 const intentExtractTimeout = 8 * time.Second
@@ -58,6 +69,7 @@ func (p *Pipeline) intentExtract(ctx context.Context, state *State) (*State, err
 		emitEvent(state, "intent_extract", "warn", err.Error())
 		return state, nil
 	}
+	intent.Type = normalizeIntentType(intent.Type)
 	intent.Missing = normalizeMissing(intent.Missing)
 	state.Intent = intent
 	emitEvent(state, "intent_extract", "done", "")
@@ -74,7 +86,8 @@ func buildIntentPrompt(prompt, contextText string) string {
 	builder.WriteString("User request:\n")
 	builder.WriteString(prompt)
 	builder.WriteString("\n\n")
-	builder.WriteString("Return JSON only with keys: goal, targets, constraints, resources, actions, missing. ")
+	builder.WriteString("Return JSON only with keys: intent_type, goal, targets, constraints, resources, actions, missing. ")
+	builder.WriteString("intent_type must be one of: explain, debug, optimize, simulate, migrate. ")
 	builder.WriteString("missing should list fields needed to build executable steps. Do not include markdown.")
 	return builder.String()
 }
@@ -88,7 +101,26 @@ func parseIntentResponse(reply string) (*Intent, error) {
 	if err := json.Unmarshal([]byte(jsonText), &intent); err != nil {
 		return nil, err
 	}
+	intent.Type = normalizeIntentType(intent.Type)
 	return &intent, nil
+}
+
+func normalizeIntentType(raw IntentType) IntentType {
+	trimmed := strings.ToLower(strings.TrimSpace(string(raw)))
+	switch trimmed {
+	case "explain", "explanation", "audit":
+		return IntentExplain
+	case "debug", "fix", "troubleshoot":
+		return IntentDebug
+	case "optimize", "optimization":
+		return IntentOptimize
+	case "simulate", "simulation", "dryrun", "dry_run":
+		return IntentSimulate
+	case "migrate", "migration", "convert":
+		return IntentMigrate
+	default:
+		return IntentExplain
+	}
 }
 
 func isGreetingPrompt(prompt string) bool {
@@ -129,13 +161,13 @@ var greetingTokens = map[string]struct{}{
 	"hithere":    {},
 	"hellothere": {},
 	"heythere":   {},
-	"你好":        {},
-	"您好":        {},
-	"嗨":         {},
-	"哈喽":        {},
-	"在吗":        {},
-	"早上好":       {},
-	"中午好":       {},
-	"下午好":       {},
-	"晚上好":       {},
+	"你好":         {},
+	"您好":         {},
+	"嗨":          {},
+	"哈喽":         {},
+	"在吗":         {},
+	"早上好":        {},
+	"中午好":        {},
+	"下午好":        {},
+	"晚上好":        {},
 }

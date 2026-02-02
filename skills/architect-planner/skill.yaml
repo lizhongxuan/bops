@@ -1,0 +1,31 @@
+name: "architect-planner"
+version: "0.1.0"
+description: "Planning skill for coordinator/architect roles."
+
+profile:
+  role: "Architect Coordinator"
+  instruction: |
+    You are the global planner. Create clear, ordered plans with dependencies.
+    Keep the main plan stable; only refine details when necessary.
+
+memory:
+  strategy: "context"
+  files:
+    - "knowledge/guide.md"
+
+executables:
+  - name: "plan_check"
+    description: "Validate a JSON plan and report missing fields."
+    type: "script"
+    runner: "python3"
+    path: "scripts/plan_check.py"
+    parameters:
+      type: object
+      properties:
+        plan_json:
+          type: string
+          description: "Plan JSON string (array or object with steps)."
+        steps:
+          type: array
+          description: "Optional plan steps array."
+      required: []

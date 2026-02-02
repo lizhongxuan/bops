@@ -58,7 +58,14 @@ func NewAgentFactory(registry *Registry, opts ...AgentFactoryOption) *AgentFacto
 }
 
 func (f *AgentFactory) Build(spec AgentSpec) (*AgentBundle, error) {
-	return f.BuildWithContext(spec, TemplateContext{})
+	bundle, err := f.BuildWithContext(spec, TemplateContext{})
+	if err != nil {
+		return nil, err
+	}
+	if err := validateBundleIsolation(spec, bundle); err != nil {
+		return nil, err
+	}
+	return bundle, nil
 }
 
 func (f *AgentFactory) BuildWithContext(spec AgentSpec, ctx TemplateContext) (*AgentBundle, error) {
@@ -147,6 +154,26 @@ func (f *AgentFactory) BuildWithContext(spec AgentSpec, ctx TemplateContext) (*A
 		Tools:         tools,
 		Skills:        skills,
 	}, nil
+}
+
+func validateBundleIsolation(spec AgentSpec, bundle *AgentBundle) error {
+	if bundle == nil {
+		return nil
+	}
+	expected := make(map[string]struct{})
+	for _, ref := range spec.Skills {
+		name, _ := splitSkillRef(ref)
+		if strings.TrimSpace(name) == "" {
+			continue
+		}
+		expected[name] = struct{}{}
+	}
+	for _, skill := range bundle.Skills {
+		if _, ok := expected[skill.Name]; !ok {
+			return fmt.Errorf("tool bundle isolation failed: %s not requested", skill.Name)
+		}
+	}
+	return nil
 }
 
 func (f *AgentFactory) resolveSkill(name, version string) (RegisteredSkill, bool) {

@@ -1,10 +1,12 @@
 <template>
   <div class="function-panel">
+    <div v-if="agentLabel" class="function-header">Agent · {{ agentLabel }}</div>
     <div v-if="items.length === 0" class="function-empty">暂无执行步骤</div>
     <details v-for="item in items" :key="item.callId" class="function-item" :open="item.status === 'running'">
       <summary class="function-summary">
         <span class="status" :class="item.status">{{ statusLabel(item.status) }}</span>
         <span v-if="item.streamUuid && item.status === 'running'" class="stream-tag">流式中</span>
+        <span v-if="loopLabel(item)" class="loop-tag">{{ loopLabel(item) }}</span>
         <span class="title">{{ item.title }}</span>
       </summary>
       <div v-if="item.content" class="function-body">
@@ -15,6 +17,8 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from "vue";
+
 export type FunctionCallUnit = {
   callId: string;
   title: string;
@@ -22,14 +26,46 @@ export type FunctionCallUnit = {
   content?: string;
   index?: number;
   streamUuid?: string;
+  loopId?: string;
+  iteration?: number;
+  agentStatus?: string;
+  agentId?: string;
+  agentName?: string;
+  agentRole?: string;
 };
 
-defineProps<{ items: FunctionCallUnit[] }>();
+const props = defineProps<{ items: FunctionCallUnit[] }>();
+
+const agentLabel = computed(() => {
+  if (!props.items.length) return "";
+  const first = props.items[0];
+  const name = first.agentName || first.agentId || "";
+  const role = first.agentRole || "";
+  if (name && role) return `${name} · ${role}`;
+  return name || role || "";
+});
 
 function statusLabel(status: FunctionCallUnit["status"]) {
   if (status === "running") return "执行中";
   if (status === "failed") return "失败";
   return "完成";
+}
+
+function loopLabel(item: FunctionCallUnit) {
+  if (!item.loopId && !item.iteration) return "";
+  const parts: string[] = [];
+  if (typeof item.iteration === "number") {
+    parts.push(`第${item.iteration}轮`);
+  }
+  if (item.loopId) {
+    parts.push(formatLoopId(item.loopId));
+  }
+  return parts.join(" / ");
+}
+
+function formatLoopId(loopId: string) {
+  if (loopId.length <= 12) return loopId;
+  return `${loopId.slice(0, 6)}...${loopId.slice(-4)}`;
 }
 
 function formatContent(content?: string) {
@@ -51,6 +87,14 @@ function formatContent(content?: string) {
   flex-direction: column;
   gap: 10px;
   padding: 8px 0;
+}
+
+.function-header {
+  font-size: 12px;
+  color: #5a5249;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .function-empty {
@@ -109,6 +153,15 @@ function formatContent(content?: string) {
   border: 1px solid rgba(122, 92, 54, 0.25);
   background: rgba(122, 92, 54, 0.08);
   color: #7a5c36;
+}
+
+.loop-tag {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid rgba(83, 90, 158, 0.25);
+  background: rgba(83, 90, 158, 0.08);
+  color: #535a9e;
 }
 
 .title {

@@ -34,6 +34,7 @@ type skillsResponse struct {
 type agentInfo struct {
 	Name   string   `json:"name"`
 	Model  string   `json:"model,omitempty"`
+	Role   string   `json:"role,omitempty"`
 	Skills []string `json:"skills"`
 }
 
@@ -116,6 +117,7 @@ func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
 		items = append(items, agentInfo{
 			Name:   strings.TrimSpace(agent.Name),
 			Model:  strings.TrimSpace(agent.Model),
+			Role:   strings.TrimSpace(agent.Role),
 			Skills: append([]string{}, agent.Skills...),
 		})
 	}

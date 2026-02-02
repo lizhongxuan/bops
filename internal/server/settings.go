@@ -11,18 +11,22 @@ import (
 )
 
 type aiSettingsRequest struct {
-	Provider *string `json:"ai_provider"`
-	APIKey   *string `json:"ai_api_key"`
-	BaseURL  *string `json:"ai_base_url"`
-	Model    *string `json:"ai_model"`
+	Provider *string   `json:"ai_provider"`
+	APIKey   *string   `json:"ai_api_key"`
+	BaseURL  *string   `json:"ai_base_url"`
+	Model    *string   `json:"ai_model"`
+	Agent    *string   `json:"default_agent"`
+	Agents   *[]string `json:"default_agents"`
 }
 
 type aiSettingsResponse struct {
-	Provider   string `json:"ai_provider"`
-	APIKeySet  bool   `json:"ai_api_key_set"`
-	BaseURL    string `json:"ai_base_url"`
-	Model      string `json:"ai_model"`
-	Configured bool   `json:"configured"`
+	Provider   string   `json:"ai_provider"`
+	APIKeySet  bool     `json:"ai_api_key_set"`
+	BaseURL    string   `json:"ai_base_url"`
+	Model      string   `json:"ai_model"`
+	Configured bool     `json:"configured"`
+	Agent      string   `json:"default_agent,omitempty"`
+	Agents     []string `json:"default_agents,omitempty"`
 }
 
 func (s *Server) handleAISettings(w http.ResponseWriter, r *http.Request) {
@@ -60,6 +64,12 @@ func (s *Server) handleAISettings(w http.ResponseWriter, r *http.Request) {
 		if req.Model != nil {
 			s.cfg.AIModel = strings.TrimSpace(*req.Model)
 		}
+		if req.Agent != nil {
+			s.cfg.DefaultAgent = strings.TrimSpace(*req.Agent)
+		}
+		if req.Agents != nil {
+			s.cfg.DefaultAgents = normalizeAgentDefaults(*req.Agents, s.cfg.DefaultAgent)
+		}
 
 		if err := config.Save(s.configPath, s.cfg); err != nil {
 			writeError(w, r, http.StatusInternalServerError, err.Error())
@@ -82,7 +92,27 @@ func (s *Server) buildAISettingsResponse() aiSettingsResponse {
 		BaseURL:    s.cfg.AIBaseURL,
 		Model:      s.cfg.AIModel,
 		Configured: configured,
+		Agent:      strings.TrimSpace(s.cfg.DefaultAgent),
+		Agents:     append([]string{}, s.cfg.DefaultAgents...),
 	}
+}
+
+func normalizeAgentDefaults(items []string, primary string) []string {
+	seen := make(map[string]struct{})
+	primary = strings.TrimSpace(primary)
+	out := make([]string, 0, len(items))
+	for _, name := range items {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" || trimmed == primary {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	return out
 }
 
 func (s *Server) applyAIConfig() {

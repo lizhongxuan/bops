@@ -2,21 +2,23 @@ const sseStream = `event: status
 ` +
   `data: {"node":"generator","status":"start"}\n\n` +
   `event: message\n` +
-  `data: {"message_id":"generator-start-1","reply_id":"reply-1","role":"assistant","type":"function_call","content":"start","is_finish":false,"index":1,"extra_info":{"call_id":"generator","execute_display_name":"{\\"name_executing\\":\\"正在生成工作流\\",\\"name_executed\\":\\"已完成生成工作流\\",\\"name_execute_failed\\":\\"生成工作流失败\\"}"}}\n\n` +
+  `data: {"message_id":"loop-1-1-start","reply_id":"reply-1","role":"assistant","type":"function_call","content":"search config","is_finish":false,"index":1,"extra_info":{"call_id":"search_file","execute_display_name":"{\\"name_executing\\":\\"正在搜索文件\\",\\"name_executed\\":\\"已完成搜索文件\\",\\"name_execute_failed\\":\\"搜索文件失败\\"}","loop_id":"loop-1","iteration":1,"agent_status":"tool_call"}}\n\n` +
   `event: delta\n` +
   `data: {"channel":"reasoning","content":"思考中..."}\n\n` +
   `event: delta\n` +
   `data: {"channel":"answer","content":"这是一段回答"}\n\n` +
   `event: message\n` +
-  `data: {"message_id":"generator-done-2","reply_id":"reply-1","role":"assistant","type":"tool_response","content":"done","is_finish":true,"index":2,"extra_info":{"call_id":"generator","execute_display_name":"{\\"name_executing\\":\\"正在生成工作流\\",\\"name_executed\\":\\"已完成生成工作流\\",\\"name_execute_failed\\":\\"生成工作流失败\\"}"}}\n\n` +
+  `data: {"message_id":"loop-1-1-done","reply_id":"reply-1","role":"assistant","type":"tool_response","content":"done","is_finish":true,"index":2,"extra_info":{"call_id":"search_file","execute_display_name":"{\\"name_executing\\":\\"正在搜索文件\\",\\"name_executed\\":\\"已完成搜索文件\\",\\"name_execute_failed\\":\\"搜索文件失败\\"}","loop_id":"loop-1","iteration":1,"agent_status":"tool_result"}}\n\n` +
   `event: message\n` +
-  `data: {"message_id":"executor-stream-3","reply_id":"reply-1","role":"assistant","type":"tool_response","content":"streaming...","is_finish":false,"index":3,"extra_info":{"call_id":"executor","stream_plugin_running":"stream-123"}}\n\n` +
+  `data: {"message_id":"loop-1-2-start","reply_id":"reply-1","role":"assistant","type":"function_call","content":"write file","is_finish":false,"index":3,"extra_info":{"call_id":"write_file","execute_display_name":"{\\"name_executing\\":\\"正在创建文件\\",\\"name_executed\\":\\"已完成创建文件\\",\\"name_execute_failed\\":\\"创建文件失败\\"}","loop_id":"loop-1","iteration":2,"agent_status":"tool_call"}}\n\n` +
   `event: message\n` +
-  `data: {"message_id":"executor-verbose-4","reply_id":"reply-1","role":"assistant","type":"verbose","content":"{\\"msg_type\\":\\"stream_plugin_finish\\",\\"data\\":\\"{\\\\\\"uuid\\\\\\":\\\\\\"stream-123\\\\\\",\\\\\\"tool_output_content\\\\\\":\\\\\\"stream done\\\\\\"}\\"}","is_finish":true,"index":4,"extra_info":{"call_id":"executor","stream_plugin_running":"stream-123"}}\n\n` +
+  `data: {"message_id":"loop-1-2-stream","reply_id":"reply-1","role":"assistant","type":"tool_response","content":"streaming...","is_finish":false,"index":4,"extra_info":{"call_id":"write_file","stream_plugin_running":"stream-123","loop_id":"loop-1","iteration":2,"agent_status":"tool_result"}}\n\n` +
+  `event: message\n` +
+  `data: {"message_id":"loop-1-2-verbose","reply_id":"reply-1","role":"assistant","type":"verbose","content":"{\\"msg_type\\":\\"stream_plugin_finish\\",\\"data\\":\\"{\\\\\\"uuid\\\\\\":\\\\\\"stream-123\\\\\\",\\\\\\"tool_output_content\\\\\\":\\\\\\"stream done\\\\\\"}\\"}","is_finish":true,"index":5,"extra_info":{"call_id":"write_file","stream_plugin_running":"stream-123","loop_id":"loop-1","iteration":2,"agent_status":"tool_result"}}\n\n` +
   `event: card\n` +
   `data: {"card_type":"file_create","title":"创建文件","files":[{"path":"workflow.yaml","content":"version: v0.1"}]}\n\n` +
   `event: result\n` +
-  `data: {"summary":"ok"}\n\n`;
+  `data: {"summary":"ok","plan":[{"step_name":"install","description":"install nginx","dependencies":[]}],"subagent_summaries":[{"agent_name":"reviewer","summary":"issues=0"}]}\n\n`;
 
 const chatEntries = [];
 let chatIndex = 0;
@@ -41,6 +43,9 @@ function updateChatEntry(id, updater) {
 
 function handleFunctionCallMessage(msg) {
   const callId = msg?.extra_info?.call_id || msg.message_id;
+  const loopId = msg?.extra_info?.loop_id || "";
+  const iteration = typeof msg?.extra_info?.iteration === "number" ? msg.extra_info.iteration : undefined;
+  const groupKey = loopId && iteration ? `loop:${loopId}:${iteration}` : callId;
   const isFinish = typeof msg.is_finish === "boolean" ? msg.is_finish : msg.type !== "function_call";
   const isRunning = msg.type === "function_call" || (msg.type === "tool_response" && !isFinish);
   const status = isRunning ? "running" : "done";
@@ -50,12 +55,14 @@ function handleFunctionCallMessage(msg) {
     title: msg.content || callId,
     status,
     content: msg.content,
-    streamUuid: streamUuid || undefined
+    streamUuid: streamUuid || undefined,
+    loopId: loopId || undefined,
+    iteration
   };
   if (msg.type === "tool_response" && msg.extra_info?.stream_plugin_running && status === "running") {
     sawStreamRunning = true;
   }
-  const entryId = functionCallEntryIds[callId];
+  const entryId = functionCallEntryIds[groupKey];
   if (entryId) {
     updateChatEntry(entryId, (entry) => ({ ...entry, functionCalls: [unit] }));
     if (streamUuid) {
@@ -63,8 +70,9 @@ function handleFunctionCallMessage(msg) {
     }
     return;
   }
-  const newId = pushChatEntry({ label: "步骤", body: "", type: "function_call", functionCalls: [unit] });
-  functionCallEntryIds[callId] = newId;
+  const label = iteration ? `第 ${iteration} 轮` : "步骤";
+  const newId = pushChatEntry({ label, body: "", type: "function_call", functionCalls: [unit] });
+  functionCallEntryIds[groupKey] = newId;
   if (streamUuid) {
     functionCallStreamEntryIds[streamUuid] = newId;
   }
@@ -151,6 +159,13 @@ function handleSSEChunk(chunk) {
     } else if (payload.channel === "answer") {
       appendAnswerDelta(payload.content || "");
     }
+  } else if (eventName === "result") {
+    if (Array.isArray(payload.plan) && payload.plan.length) {
+      pushChatEntry({ label: "计划", body: "plan", type: "ai" });
+    }
+    if (Array.isArray(payload.subagent_summaries) && payload.subagent_summaries.length) {
+      pushChatEntry({ label: "子 Agent 汇总", body: "agents", type: "ai" });
+    }
   }
 }
 
@@ -161,9 +176,13 @@ for (const chunk of sseStream.split("\n\n")) {
 const hasAnswer = chatEntries.some((entry) => entry.type === "ai" && entry.body.includes("回答"));
 const hasReasoning = chatEntries.some((entry) => entry.type === "ai" && (entry.reasoning || "").includes("思考"));
 const hasSteps = chatEntries.some((entry) => entry.type === "function_call" && (entry.functionCalls || []).length > 0);
+const loopEntries = chatEntries.filter((entry) => entry.type === "function_call");
+const hasSecondIteration = loopEntries.some((entry) => (entry.label || "").includes("第 2 轮"));
 const hasFileCard = chatEntries.some(
   (entry) => entry.type === "card" && entry.card?.card_type === "file_create"
 );
+const hasPlan = chatEntries.some((entry) => entry.label === "计划");
+const hasSummaries = chatEntries.some((entry) => entry.label === "子 Agent 汇总");
 
 if (!hasAnswer) {
   console.error("E2E failed: answer delta missing");
@@ -185,8 +204,20 @@ if (!hasSteps) {
   console.error("E2E failed: function calls missing");
   process.exit(1);
 }
+if (loopEntries.length < 2 || !hasSecondIteration) {
+  console.error("E2E failed: loop iteration grouping missing");
+  process.exit(1);
+}
 if (!hasFileCard) {
   console.error("E2E failed: card entries missing");
+  process.exit(1);
+}
+if (!hasPlan) {
+  console.error("E2E failed: plan entry missing");
+  process.exit(1);
+}
+if (!hasSummaries) {
+  console.error("E2E failed: subagent summaries missing");
   process.exit(1);
 }
 

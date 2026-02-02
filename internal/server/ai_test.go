@@ -12,8 +12,8 @@ import (
 	"testing"
 
 	"bops/internal/ai"
-	"bops/internal/aiworkflow"
 	"bops/internal/aistore"
+	"bops/internal/aiworkflow"
 	"bops/internal/envstore"
 	"bops/internal/workflowstore"
 )
@@ -109,8 +109,9 @@ func newTestServer(t *testing.T) *Server {
 func TestAIWorkflowGenerate(t *testing.T) {
 	srv := newTestServer(t)
 	intentJSON := `{"goal":"install nginx","missing":[]}`
+	planJSON := `[{"step_name":"install","description":"install nginx","dependencies":[]}]`
 	workflowJSON := `{"workflow":{"version":"v0.1","name":"demo","steps":[{"name":"ok","action":"cmd.run","targets":["local"],"with":{"cmd":"echo hi"}}]}}`
-	stub := &stubSequence{responses: []string{intentJSON, workflowJSON}}
+	stub := &stubSequence{responses: []string{intentJSON, planJSON, workflowJSON}}
 	srv.aiClient = stub
 	workflow, err := aiworkflow.New(aiworkflow.Config{
 		Client:       stub,
@@ -209,6 +210,9 @@ func TestBuildStreamMessageFromEvent(t *testing.T) {
 		Status:      "start",
 		DisplayName: "生成工作流",
 		Message:     "begin",
+		AgentID:     "main",
+		AgentName:   "main",
+		AgentRole:   "primary",
 	}
 	msg, ok := buildStreamMessageFromEvent(startEvt, "reply-1", 1)
 	if !ok {
@@ -223,12 +227,36 @@ func TestBuildStreamMessageFromEvent(t *testing.T) {
 	if msg.ExtraInfo.ExecuteDisplayName == "" {
 		t.Fatalf("expected execute_display_name to be set")
 	}
+	if msg.ExtraInfo.AgentID != "main" || msg.ExtraInfo.AgentName != "main" || msg.ExtraInfo.AgentRole != "primary" {
+		t.Fatalf("expected agent fields to be set, got %+v", msg.ExtraInfo)
+	}
 	var names map[string]string
 	if err := json.Unmarshal([]byte(msg.ExtraInfo.ExecuteDisplayName), &names); err != nil {
 		t.Fatalf("decode execute_display_name: %v", err)
 	}
 	if names["name_executing"] == "" || names["name_executed"] == "" || names["name_execute_failed"] == "" {
 		t.Fatalf("expected execute_display_name fields to be populated")
+	}
+
+	loopEvt := aiworkflow.Event{
+		Node:        "tool",
+		Status:      "start",
+		LoopID:      "loop-1",
+		Iteration:   2,
+		AgentStatus: "tool_call",
+	}
+	loopMsg, ok := buildStreamMessageFromEvent(loopEvt, "reply-1", 6)
+	if !ok {
+		t.Fatalf("expected loop message to be built")
+	}
+	if loopMsg.ExtraInfo.LoopID != "loop-1" {
+		t.Fatalf("expected loop_id loop-1, got %s", loopMsg.ExtraInfo.LoopID)
+	}
+	if loopMsg.ExtraInfo.Iteration != 2 {
+		t.Fatalf("expected iteration 2, got %d", loopMsg.ExtraInfo.Iteration)
+	}
+	if loopMsg.ExtraInfo.AgentStatus != "tool_call" {
+		t.Fatalf("expected agent_status tool_call, got %s", loopMsg.ExtraInfo.AgentStatus)
 	}
 
 	errorEvt := aiworkflow.Event{

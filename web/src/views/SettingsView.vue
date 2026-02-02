@@ -64,6 +64,37 @@
         </div>
 
         <div class="list-block">
+          <div class="list-title">默认 Agent</div>
+          <div v-if="agentsLoading" class="empty">加载中...</div>
+          <div v-else-if="agentsError" class="empty">{{ agentsError }}</div>
+          <div v-else class="agent-defaults">
+            <div class="default-row">
+              <label>主 Agent</label>
+              <select v-model="defaultAgent">
+                <option value="">系统默认</option>
+                <option v-for="agent in agents" :key="agent.name" :value="agent.name">
+                  {{ formatAgentLabel(agent) }}
+                </option>
+              </select>
+            </div>
+            <div class="default-row">
+              <label>协作 Agents</label>
+              <select v-model="defaultAgents" multiple>
+                <option v-for="agent in agents" :key="agent.name" :value="agent.name" :disabled="agent.name === defaultAgent">
+                  {{ formatAgentLabel(agent) }}
+                </option>
+              </select>
+            </div>
+            <div class="default-actions">
+              <button class="btn" type="button" :disabled="agentSaveBusy" @click="saveAgentDefaults">
+                {{ agentSaveBusy ? "保存中..." : "保存默认 Agent" }}
+              </button>
+              <span class="status">{{ agentSaveMessage }}</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="list-block">
           <div class="list-title">Skills</div>
           <div v-if="skillsLoading" class="empty">加载中...</div>
           <div v-else-if="skillsError" class="empty">{{ skillsError }}</div>
@@ -118,7 +149,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { ApiError, request } from "../lib/api";
 
 type AISettingsResponse = {
@@ -127,6 +158,8 @@ type AISettingsResponse = {
   ai_base_url?: string;
   ai_model?: string;
   configured?: boolean;
+  default_agent?: string;
+  default_agents?: string[];
 };
 
 type AISettingsForm = {
@@ -156,6 +189,7 @@ type SkillsResponse = {
 type AgentInfo = {
   name: string;
   model?: string;
+  role?: string;
   skills: string[];
 };
 
@@ -174,6 +208,8 @@ const reloadBusy = ref(false);
 const reloadMessage = ref("");
 const skillsError = ref("");
 const agentsError = ref("");
+const agentSaveBusy = ref(false);
+const agentSaveMessage = ref("");
 const form = ref<AISettingsForm>({
   provider: "",
   apiKey: "",
@@ -182,6 +218,8 @@ const form = ref<AISettingsForm>({
 });
 const skills = ref<SkillInfo[]>([]);
 const agents = ref<AgentInfo[]>([]);
+const defaultAgent = ref("");
+const defaultAgents = ref<string[]>([]);
 
 const configured = computed(() => form.value.provider.trim() !== "" && apiKeySet.value);
 
@@ -197,11 +235,31 @@ async function loadSettings() {
       model: data.ai_model || ""
     };
     apiKeySet.value = Boolean(data.ai_api_key_set);
+    defaultAgent.value = (data.default_agent || "").trim();
+    defaultAgents.value = Array.isArray(data.default_agents)
+      ? data.default_agents.filter((name) => typeof name === "string" && name.trim()).map((name) => name.trim())
+      : [];
+    sanitizeDefaults();
   } catch (err) {
     statusMessage.value = "加载失败，请检查服务是否启动";
   } finally {
     loading.value = false;
   }
+}
+
+function sanitizeDefaults() {
+  const names = new Set(agents.value.map((agent) => agent.name));
+  if (defaultAgent.value && !names.has(defaultAgent.value)) {
+    defaultAgent.value = "";
+  }
+  defaultAgents.value = defaultAgents.value.filter(
+    (name) => names.has(name) && name !== defaultAgent.value
+  );
+}
+
+function formatAgentLabel(agent: AgentInfo) {
+  const role = agent.role ? ` (${agent.role})` : "";
+  return `${agent.name}${role}`;
 }
 
 async function saveSettings() {
@@ -266,11 +324,39 @@ async function loadAgents() {
   try {
     const data = await request<AgentsResponse>("/agents");
     agents.value = data.items || [];
+    sanitizeDefaults();
   } catch (err) {
     agentsError.value = "加载 Agents 失败，请检查服务是否启动";
     agents.value = [];
+    sanitizeDefaults();
   } finally {
     agentsLoading.value = false;
+  }
+}
+
+async function saveAgentDefaults() {
+  agentSaveBusy.value = true;
+  agentSaveMessage.value = "保存中...";
+  const payload: Record<string, unknown> = {
+    default_agent: defaultAgent.value.trim(),
+    default_agents: defaultAgents.value.filter((name) => name && name.trim())
+  };
+  try {
+    const data = await request<AISettingsResponse>("/settings/ai", {
+      method: "PUT",
+      body: payload
+    });
+    defaultAgent.value = (data.default_agent || "").trim();
+    defaultAgents.value = Array.isArray(data.default_agents)
+      ? data.default_agents.filter((name) => typeof name === "string" && name.trim()).map((name) => name.trim())
+      : [];
+    agentSaveMessage.value = "默认 Agent 已保存";
+    sanitizeDefaults();
+  } catch (err) {
+    const apiErr = err as ApiError;
+    agentSaveMessage.value = apiErr.message ? `保存失败: ${apiErr.message}` : "保存失败";
+  } finally {
+    agentSaveBusy.value = false;
   }
 }
 
@@ -278,6 +364,10 @@ onMounted(() => {
   loadSettings();
   loadSkills();
   loadAgents();
+});
+
+watch(defaultAgent, () => {
+  defaultAgents.value = defaultAgents.value.filter((name) => name !== defaultAgent.value);
 });
 </script>
 
@@ -393,6 +483,41 @@ select {
 .list-title {
   font-size: 13px;
   font-weight: 600;
+}
+
+.agent-defaults {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(27, 27, 27, 0.12);
+  background: #fff;
+}
+
+.default-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.default-row label {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.default-row select {
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(27, 27, 27, 0.16);
+  background: #fff;
+  font-size: 12px;
+}
+
+.default-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .skill-list,

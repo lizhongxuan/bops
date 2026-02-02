@@ -22,13 +22,18 @@ type Config struct {
 	AIApiKey           string        `json:"ai_api_key"`
 	AIBaseURL          string        `json:"ai_base_url"`
 	AIModel            string        `json:"ai_model"`
+	AIPlannerModel     string        `json:"ai_planner_model"`
+	AIExecutorModel    string        `json:"ai_executor_model"`
 	ClaudeSkills       []string      `json:"claude_skills"`
 	Agents             []AgentConfig `json:"agents"`
+	DefaultAgent       string        `json:"default_agent"`
+	DefaultAgents      []string      `json:"default_agents"`
 	ToolConflictPolicy string        `json:"tool_conflict_policy"`
 }
 
 type AgentConfig struct {
 	Name   string   `json:"name"`
+	Role   string   `json:"role,omitempty"`
 	Model  string   `json:"model"`
 	Skills []string `json:"skills"`
 }
@@ -48,8 +53,12 @@ func DefaultConfig() Config {
 		AIApiKey:           "",
 		AIBaseURL:          "",
 		AIModel:            "",
+		AIPlannerModel:     "",
+		AIExecutorModel:    "",
 		ClaudeSkills:       nil,
 		Agents:             nil,
+		DefaultAgent:       "",
+		DefaultAgents:      nil,
 		ToolConflictPolicy: "error",
 	}
 }
@@ -109,6 +118,12 @@ func ApplyEnvOverrides(cfg *Config) error {
 			return err
 		}
 		cfg.Agents = agents
+	}
+	if raw := os.Getenv("BOPS_AI_PLANNER_MODEL"); raw != "" {
+		cfg.AIPlannerModel = strings.TrimSpace(raw)
+	}
+	if raw := os.Getenv("BOPS_AI_EXECUTOR_MODEL"); raw != "" {
+		cfg.AIExecutorModel = strings.TrimSpace(raw)
 	}
 	if raw := os.Getenv("BOPS_TOOL_CONFLICT_POLICY"); raw != "" {
 		cfg.ToolConflictPolicy = raw

@@ -37,6 +37,7 @@
   "agents": [
     {
       "name": "ops-agent",
+      "role": "coder",
       "model": "gpt-4o-mini",
       "skills": ["demo-ping"]
     }
@@ -59,6 +60,11 @@
 - 可执行“校验 / 沙箱验证”查看错误与输出日志。
 - 风险等级为 `high` 或校验失败时，需要人工确认并填写原因后才能保存。
 - 保存后自动跳转到工作流编排页。
+
+多 Agent 参数（流式接口 `/api/ai/workflow/stream`）:
+- `agent_name`: 指定主 Agent（默认为空，走默认 Loop Agent）
+- `agents`: 参与协作的 Agent 名称数组（触发 multi 模式）
+- `agent_mode`: `loop` / `multi` / `pipeline`，当 `agents` 非空时应使用 `multi`
 
 验证终端:
 - 在首页执行“沙箱验证”后，点击“终端详情”进入 `验证终端` 页面查看 stdout/stderr。

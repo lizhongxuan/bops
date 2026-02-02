@@ -1,9 +1,11 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -12,9 +14,11 @@ import (
 	"bops/internal/aiworkflow"
 	"bops/internal/aiworkflowstore"
 	"bops/internal/logging"
+	"bops/internal/skills"
 	"bops/internal/validationenv"
 	"bops/internal/validationrun"
 	"bops/internal/workflow"
+	"github.com/cloudwego/eino/components/tool"
 	"go.uber.org/zap"
 )
 
@@ -99,15 +103,21 @@ type aiSummaryResponse struct {
 }
 
 type aiStreamRequest struct {
-	Mode       string         `json:"mode,omitempty"`
-	Prompt     string         `json:"prompt,omitempty"`
-	YAML       string         `json:"yaml,omitempty"`
-	Issues     []string       `json:"issues,omitempty"`
-	Context    map[string]any `json:"context,omitempty"`
-	Env        string         `json:"env,omitempty"`
-	Execute    bool           `json:"execute,omitempty"`
-	MaxRetries int            `json:"max_retries,omitempty"`
-	DraftID    string         `json:"draft_id,omitempty"`
+	Mode         string         `json:"mode,omitempty"`
+	AgentMode    string         `json:"agent_mode,omitempty"`
+	AgentName    string         `json:"agent_name,omitempty"`
+	Agents       []string       `json:"agents,omitempty"`
+	SessionKey   string         `json:"session_key,omitempty"`
+	Prompt       string         `json:"prompt,omitempty"`
+	Script       string         `json:"script,omitempty"`
+	YAML         string         `json:"yaml,omitempty"`
+	Issues       []string       `json:"issues,omitempty"`
+	Context      map[string]any `json:"context,omitempty"`
+	Env          string         `json:"env,omitempty"`
+	Execute      bool           `json:"execute,omitempty"`
+	MaxRetries   int            `json:"max_retries,omitempty"`
+	LoopMaxIters int            `json:"loop_max_iters,omitempty"`
+	DraftID      string         `json:"draft_id,omitempty"`
 }
 
 const (
@@ -127,11 +137,17 @@ type streamMessage struct {
 }
 
 type streamMessageExt struct {
-	CallID             string `json:"call_id,omitempty"`
-	ExecuteDisplayName string `json:"execute_display_name,omitempty"`
-	PluginStatus       string `json:"plugin_status,omitempty"`
-	MessageTitle       string `json:"message_title,omitempty"`
+	CallID              string `json:"call_id,omitempty"`
+	ExecuteDisplayName  string `json:"execute_display_name,omitempty"`
+	PluginStatus        string `json:"plugin_status,omitempty"`
+	MessageTitle        string `json:"message_title,omitempty"`
 	StreamPluginRunning string `json:"stream_plugin_running,omitempty"`
+	LoopID              string `json:"loop_id,omitempty"`
+	Iteration           int    `json:"iteration,omitempty"`
+	AgentStatus         string `json:"agent_status,omitempty"`
+	AgentID             string `json:"agent_id,omitempty"`
+	AgentName           string `json:"agent_name,omitempty"`
+	AgentRole           string `json:"agent_role,omitempty"`
 }
 
 func (s *Server) handleAIChatSessions(w http.ResponseWriter, r *http.Request) {
@@ -554,12 +570,44 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 	if mode == "" {
 		mode = string(aiworkflow.ModeGenerate)
 	}
+	if strings.TrimSpace(req.AgentName) == "" && len(req.Agents) == 0 {
+		if strings.TrimSpace(s.cfg.DefaultAgent) != "" {
+			req.AgentName = strings.TrimSpace(s.cfg.DefaultAgent)
+		}
+		if len(s.cfg.DefaultAgents) > 0 {
+			req.Agents = append([]string{}, s.cfg.DefaultAgents...)
+		}
+	}
+	agentMode := strings.ToLower(strings.TrimSpace(req.AgentMode))
+	if agentMode == "" {
+		if len(req.Agents) > 0 {
+			agentMode = "multi"
+		} else if mode == string(aiworkflow.ModeGenerate) {
+			agentMode = "loop"
+		} else {
+			agentMode = "pipeline"
+		}
+	}
+	if agentMode != "loop" && agentMode != "multi" {
+		agentMode = "pipeline"
+	}
+	if mode == string(aiworkflow.ModeFix) {
+		agentMode = "pipeline"
+	}
 	if mode == string(aiworkflow.ModeGenerate) && strings.TrimSpace(req.Prompt) == "" {
 		writeError(w, r, http.StatusBadRequest, "prompt is required")
 		return
 	}
 	if mode == string(aiworkflow.ModeFix) && strings.TrimSpace(req.YAML) == "" {
 		writeError(w, r, http.StatusBadRequest, "yaml is required")
+		return
+	}
+	if mode == "simulate" && strings.TrimSpace(req.YAML) == "" {
+		writeError(w, r, http.StatusBadRequest, "yaml is required")
+		return
+	}
+	if mode == "migrate" && strings.TrimSpace(firstNonEmpty(req.Script, req.Prompt)) == "" {
+		writeError(w, r, http.StatusBadRequest, "script is required")
 		return
 	}
 
@@ -582,6 +630,7 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 	eventIndex := 0
 	logging.L().Debug("ai workflow stream start",
 		zap.String("mode", mode),
+		zap.String("agent_mode", agentMode),
 		zap.Int("prompt_len", len(strings.TrimSpace(req.Prompt))),
 		zap.Int("yaml_len", len(req.YAML)),
 		zap.Int("issues", len(req.Issues)),
@@ -599,8 +648,10 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 	events := make(chan aiworkflow.Event, 16)
 	streamCh := make(chan ai.StreamDelta, 32)
 	type streamResult struct {
-		state *aiworkflow.State
-		err   error
+		state      *aiworkflow.State
+		err        error
+		simulation *aiworkflow.SimulationResult
+		migration  string
 	}
 	resultCh := make(chan streamResult, 1)
 
@@ -622,8 +673,9 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 	if baseYAML != "" && countStepsInYAML(baseYAML) == 0 {
 		baseYAML = ""
 	}
+	systemPrompt := s.systemPrompt(contextText)
 	opts := aiworkflow.RunOptions{
-		SystemPrompt:  s.systemPrompt(contextText),
+		SystemPrompt:  systemPrompt,
 		ContextText:   contextText,
 		ValidationEnv: env,
 		SkipExecute:   !req.Execute,
@@ -632,14 +684,67 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 		StreamSink:    streamSink,
 		BaseYAML:      baseYAML,
 	}
+	if sessionKey := strings.TrimSpace(req.SessionKey); sessionKey != "" {
+		opts.SessionKey = sessionKey
+	} else if strings.TrimSpace(req.DraftID) != "" {
+		opts.SessionKey = strings.TrimSpace(req.DraftID)
+	}
+	if strings.TrimSpace(req.AgentName) != "" {
+		opts.AgentSpec = aiworkflow.AgentSpec{Name: strings.TrimSpace(req.AgentName)}
+	}
+	if agentMode == "loop" {
+		toolExecutor, toolNames := s.buildLoopToolExecutor(opts.AgentSpec)
+		opts.SystemPrompt = s.loopSystemPrompt(contextText)
+		opts.ToolExecutor = toolExecutor
+		opts.ToolNames = toolNames
+		opts.LoopMaxIters = req.LoopMaxIters
+		opts.FallbackToPipeline = true
+		opts.FallbackSystemPrompt = systemPrompt
+	}
 
 	go func() {
 		defer close(events)
 		defer close(streamCh)
 		var state *aiworkflow.State
 		var runErr error
+		if mode == "simulate" {
+			simResult, simErr := aiworkflow.RunSimulation(req.YAML, req.Context)
+			summary := ""
+			if simResult != nil {
+				summary = simResult.Summary
+			}
+			state = &aiworkflow.State{
+				Mode:    aiworkflow.ModeGenerate,
+				Prompt:  strings.TrimSpace(req.Prompt),
+				Context: req.Context,
+				YAML:    strings.TrimSpace(req.YAML),
+				Summary: summary,
+			}
+			resultCh <- streamResult{state: state, err: simErr, simulation: simResult}
+			return
+		}
+		if mode == "migrate" {
+			scriptText := firstNonEmpty(req.Script, req.Prompt)
+			migrated, migErr := aiworkflow.ConvertScriptToYAML(scriptText)
+			state = &aiworkflow.State{
+				Mode:    aiworkflow.ModeGenerate,
+				Prompt:  strings.TrimSpace(scriptText),
+				Context: req.Context,
+				YAML:    migrated,
+				Summary: "migration completed",
+			}
+			resultCh <- streamResult{state: state, err: migErr, migration: migrated}
+			return
+		}
 		if mode == string(aiworkflow.ModeFix) {
 			state, runErr = s.aiWorkflow.RunFix(ctx, req.YAML, req.Issues, opts)
+		} else if agentMode == "loop" {
+			state, runErr = s.aiWorkflow.RunAgentLoop(ctx, strings.TrimSpace(req.Prompt), req.Context, opts)
+		} else if agentMode == "multi" {
+			specs := buildAgentSpecs(req.AgentName, req.Agents)
+			state, runErr = s.aiWorkflow.RunMultiAgent(ctx, strings.TrimSpace(req.Prompt), req.Context, specs, opts)
+		} else if strings.TrimSpace(req.AgentName) != "" {
+			state, runErr = s.aiWorkflow.RunAgent(ctx, strings.TrimSpace(req.Prompt), req.Context, opts)
 		} else {
 			state, runErr = s.aiWorkflow.RunGenerate(ctx, strings.TrimSpace(req.Prompt), req.Context, opts)
 		}
@@ -776,30 +881,36 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 			if mode == string(aiworkflow.ModeGenerate) {
 				title = titleFromMessage(req.Prompt)
 				prompt = req.Prompt
+			} else if mode == "migrate" {
+				title = "AI Migrate"
+				prompt = firstNonEmpty(req.Script, req.Prompt)
 			} else if strings.TrimSpace(req.DraftID) == "" {
 				title = "AI Fix"
 			}
-			draftID := s.saveAIDraft(req.DraftID, title, prompt, pending.state)
-			if pending.state != nil {
-				trimmedYAML := strings.TrimSpace(pending.state.YAML)
-				if trimmedYAML != "" {
-					path := "workflow.yaml"
-					if strings.TrimSpace(draftID) != "" {
-						path = fmt.Sprintf("workflows/%s.yaml", draftID)
-					}
-					writeSSE(w, "card", map[string]any{
-						"card_id":   "file-create",
-						"reply_id":  replyID,
-						"card_type": cardTypeFileCreate,
-						"title":     "创建文件",
-						"files": []map[string]string{
-							{
-								"path":     path,
-								"language": "yaml",
-								"content":  trimmedYAML,
+			draftID := ""
+			if mode != "simulate" {
+				draftID = s.saveAIDraft(req.DraftID, title, prompt, pending.state)
+				if pending.state != nil {
+					trimmedYAML := strings.TrimSpace(pending.state.YAML)
+					if trimmedYAML != "" {
+						path := "workflow.yaml"
+						if strings.TrimSpace(draftID) != "" {
+							path = fmt.Sprintf("workflows/%s.yaml", draftID)
+						}
+						writeSSE(w, "card", map[string]any{
+							"card_id":   "file-create",
+							"reply_id":  replyID,
+							"card_type": cardTypeFileCreate,
+							"title":     "创建文件",
+							"files": []map[string]string{
+								{
+									"path":     path,
+									"language": "yaml",
+									"content":  trimmedYAML,
+								},
 							},
-						},
-					})
+						})
+					}
 				}
 			}
 			payload := map[string]any{
@@ -810,7 +921,33 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 				"needs_review": pending.state.NeedsReview,
 				"questions":    pending.state.Questions,
 				"history":      pending.state.History,
-				"draft_id":     draftID,
+			}
+			if mode != "simulate" {
+				payload["draft_id"] = draftID
+			}
+			if pending.state.Intent != nil && pending.state.Intent.Type != "" {
+				payload["intent_type"] = string(pending.state.Intent.Type)
+			}
+			if len(pending.state.Plan) > 0 {
+				payload["plan"] = pending.state.Plan
+			}
+			if len(pending.state.SubagentSummaries) > 0 {
+				payload["subagent_summaries"] = pending.state.SubagentSummaries
+			}
+			if pending.state.LoopMetrics != nil {
+				payload["loop_metrics"] = map[string]any{
+					"loop_id":       pending.state.LoopMetrics.LoopID,
+					"iterations":    pending.state.LoopMetrics.Iterations,
+					"tool_calls":    pending.state.LoopMetrics.ToolCalls,
+					"tool_failures": pending.state.LoopMetrics.ToolFailures,
+					"duration_ms":   pending.state.LoopMetrics.DurationMs,
+				}
+			}
+			if pending.simulation != nil {
+				payload["simulation"] = pending.simulation
+			}
+			if pending.migration != "" {
+				payload["migration"] = map[string]any{"yaml": pending.migration}
 			}
 			logging.L().Debug("ai workflow stream result",
 				zap.String("mode", mode),
@@ -839,14 +976,23 @@ func countStepsInYAML(yamlText string) int {
 	return count
 }
 
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func buildExecuteDisplayName(displayName string) string {
 	trimmed := strings.TrimSpace(displayName)
 	if trimmed == "" {
 		return ""
 	}
 	payload := map[string]string{
-		"name_executing":     "正在" + trimmed,
-		"name_executed":      "已完成" + trimmed,
+		"name_executing":      "正在" + trimmed,
+		"name_executed":       "已完成" + trimmed,
 		"name_execute_failed": trimmed + "失败",
 	}
 	data, err := json.Marshal(payload)
@@ -903,10 +1049,16 @@ func buildStreamMessageFromEvent(evt aiworkflow.Event, replyID string, index int
 		IsFinish:  isFinish,
 		Index:     index,
 		ExtraInfo: streamMessageExt{
-			CallID:             callID,
-			ExecuteDisplayName: buildExecuteDisplayName(displayName),
-			PluginStatus:       pluginStatus,
+			CallID:              callID,
+			ExecuteDisplayName:  buildExecuteDisplayName(displayName),
+			PluginStatus:        pluginStatus,
 			StreamPluginRunning: streamPluginRunning,
+			LoopID:              evt.LoopID,
+			Iteration:           evt.Iteration,
+			AgentStatus:         evt.AgentStatus,
+			AgentID:             evt.AgentID,
+			AgentName:           evt.AgentName,
+			AgentRole:           evt.AgentRole,
 		},
 	}, true
 }
@@ -947,10 +1099,16 @@ func buildStreamPluginFinishVerbose(evt aiworkflow.Event, replyID string, index 
 		IsFinish:  true,
 		Index:     index,
 		ExtraInfo: streamMessageExt{
-			CallID:             callID,
-			ExecuteDisplayName: buildExecuteDisplayName(strings.TrimSpace(evt.DisplayName)),
-			PluginStatus:       "0",
+			CallID:              callID,
+			ExecuteDisplayName:  buildExecuteDisplayName(strings.TrimSpace(evt.DisplayName)),
+			PluginStatus:        "0",
 			StreamPluginRunning: streamUUID,
+			LoopID:              evt.LoopID,
+			Iteration:           evt.Iteration,
+			AgentStatus:         evt.AgentStatus,
+			AgentID:             evt.AgentID,
+			AgentName:           evt.AgentName,
+			AgentRole:           evt.AgentRole,
 		},
 	}, true
 }
@@ -1074,6 +1232,160 @@ func (s *Server) systemPrompt(contextText string) string {
 		return prompt
 	}
 	return strings.TrimSpace(fmt.Sprintf("%s\n\n上下文信息:\n%s", prompt, contextText))
+}
+
+func (s *Server) loopSystemPrompt(contextText string) string {
+	prompt := strings.TrimSpace(s.aiLoopPrompt)
+	if prompt == "" {
+		prompt = strings.TrimSpace(s.aiPrompt)
+	}
+	if contextText == "" {
+		return prompt
+	}
+	return strings.TrimSpace(fmt.Sprintf("%s\n\n上下文信息:\n%s", prompt, contextText))
+}
+
+func (s *Server) buildLoopToolExecutor(spec aiworkflow.AgentSpec) (aiworkflow.ToolExecutor, []string) {
+	if s.skillRegistry == nil {
+		return nil, nil
+	}
+	policy := parseToolConflictPolicy(s.cfg.ToolConflictPolicy)
+	factory := skills.NewAgentFactory(s.skillRegistry, skills.WithToolConflictPolicy(policy))
+	skillsRef := append([]string{}, spec.Skills...)
+	if len(skillsRef) == 0 {
+		skillsRef = s.resolveAgentSkills(spec.Name)
+	}
+	if len(skillsRef) == 0 {
+		if strings.TrimSpace(spec.Name) != "" {
+			logging.L().Warn("loop tools build skipped: agent has no skills", zap.String("agent", spec.Name))
+			return nil, nil
+		}
+		skillsRef = append([]string{}, s.cfg.ClaudeSkills...)
+	}
+	if len(skillsRef) == 0 {
+		return nil, nil
+	}
+	agentName := strings.TrimSpace(spec.Name)
+	if agentName == "" {
+		agentName = "loop"
+	}
+	bundle, err := factory.Build(skills.AgentSpec{
+		Name:   agentName,
+		Skills: skillsRef,
+	})
+	if err != nil {
+		logging.L().Warn("loop tools build failed", zap.Error(err))
+		return nil, nil
+	}
+	toolMap := make(map[string]tool.InvokableTool)
+	names := make([]string, 0, len(bundle.Tools))
+	for _, t := range bundle.Tools {
+		info, err := t.Info(context.Background())
+		if err != nil {
+			continue
+		}
+		name := strings.TrimSpace(info.Name)
+		if name == "" {
+			continue
+		}
+		toolMap[name] = t
+		names = append(names, name)
+	}
+	if len(toolMap) == 0 {
+		return nil, nil
+	}
+	sort.Strings(names)
+	executor := func(ctx context.Context, name string, args map[string]any) (string, error) {
+		toolItem, ok := toolMap[name]
+		if !ok {
+			return "", fmt.Errorf("tool not found: %s", name)
+		}
+		payload := encodeToolArgs(args)
+		return toolItem.InvokableRun(ctx, payload)
+	}
+	return executor, names
+}
+
+func (s *Server) resolveAgentSkills(name string) []string {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return nil
+	}
+	for _, agent := range s.cfg.Agents {
+		if strings.EqualFold(strings.TrimSpace(agent.Name), trimmed) {
+			return append([]string{}, agent.Skills...)
+		}
+	}
+	return nil
+}
+
+func parseToolConflictPolicy(raw string) skills.ToolConflictPolicy {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "overwrite":
+		return skills.ToolConflictOverwrite
+	case "keep":
+		return skills.ToolConflictKeepExisting
+	case "prefix":
+		return skills.ToolConflictPrefix
+	default:
+		return skills.ToolConflictError
+	}
+}
+
+func encodeToolArgs(args map[string]any) string {
+	if len(args) == 0 {
+		return "{}"
+	}
+	data, err := json.Marshal(args)
+	if err != nil {
+		return "{}"
+	}
+	if string(data) == "null" {
+		return "{}"
+	}
+	return string(data)
+}
+
+func buildAgentSpecs(primary string, agents []string) []aiworkflow.AgentSpec {
+	seen := make(map[string]struct{})
+	ordered := make([]string, 0)
+
+	primaryName := strings.TrimSpace(primary)
+	if primaryName != "" {
+		ordered = append(ordered, primaryName)
+		seen[primaryName] = struct{}{}
+	}
+
+	for _, name := range agents {
+		trimmed := strings.TrimSpace(name)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		ordered = append(ordered, trimmed)
+	}
+
+	if len(ordered) == 0 {
+		ordered = append(ordered, "main")
+	}
+
+	if primaryName == "" {
+		for i, name := range ordered {
+			if name == "main" && i > 0 {
+				ordered = append([]string{"main"}, append(ordered[:i], ordered[i+1:]...)...)
+				break
+			}
+		}
+	}
+
+	specs := make([]aiworkflow.AgentSpec, 0, len(ordered))
+	for _, name := range ordered {
+		specs = append(specs, aiworkflow.AgentSpec{Name: name})
+	}
+	return specs
 }
 
 func (s *Server) buildContextText(extra map[string]any) string {

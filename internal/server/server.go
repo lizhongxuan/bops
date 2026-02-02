@@ -39,6 +39,7 @@ type Server struct {
 	aiStore         *aistore.Store
 	aiClient        ai.Client
 	aiPrompt        string
+	aiLoopPrompt    string
 	aiWorkflow      *aiworkflow.Pipeline
 	aiWorkflowStore *aiworkflowstore.Store
 	validationStore *validationenv.Store
@@ -58,12 +59,15 @@ func New(cfg config.Config, configPath string) *Server {
 	mux := http.NewServeMux()
 	bus := eventbus.New()
 	aiClient, _ := ai.NewClient(ai.Config{
-		Provider: cfg.AIProvider,
-		APIKey:   cfg.AIApiKey,
-		BaseURL:  cfg.AIBaseURL,
-		Model:    cfg.AIModel,
+		Provider:      cfg.AIProvider,
+		APIKey:        cfg.AIApiKey,
+		BaseURL:       cfg.AIBaseURL,
+		Model:         cfg.AIModel,
+		PlannerModel:  cfg.AIPlannerModel,
+		ExecutorModel: cfg.AIExecutorModel,
 	})
 	prompt := ai.LoadPrompt(filepath.Join("docs", "prompt-workflow.md"))
+	loopPrompt := ai.LoadLoopPrompt(filepath.Join("docs", "prompt-loop.md"))
 	scriptStore := scriptstore.New(filepath.Join(cfg.DataDir, "scripts"))
 	aiWorkflowStore := aiworkflowstore.New(filepath.Join(cfg.DataDir, "ai_workflows"))
 	var aiWorkflow *aiworkflow.Pipeline
@@ -94,6 +98,7 @@ func New(cfg config.Config, configPath string) *Server {
 		aiStore:         aistore.New(filepath.Join(cfg.DataDir, "ai_sessions")),
 		aiClient:        aiClient,
 		aiPrompt:        prompt,
+		aiLoopPrompt:    loopPrompt,
 		aiWorkflow:      aiWorkflow,
 		aiWorkflowStore: aiWorkflowStore,
 		validationStore: validationenv.NewStore(filepath.Join(cfg.DataDir, "validation_envs")),

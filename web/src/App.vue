@@ -215,7 +215,7 @@ const displayWorkflowName = computed(() =>
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 24px 32px 16px;
+    padding: 6px 16px 6px;
     gap: 16px;
   }
 
@@ -284,7 +284,7 @@ const displayWorkflowName = computed(() =>
 }
 
 .content {
-  padding: 16px 16px 16px;
+  padding: 1px 1px 1px;
   display: flex;
   flex-direction: column;
   flex: 1;

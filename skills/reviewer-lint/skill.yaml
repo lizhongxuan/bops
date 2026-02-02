@@ -1,0 +1,28 @@
+name: "reviewer-lint"
+version: "0.1.0"
+description: "Lightweight YAML review skill for workflow validation."
+
+profile:
+  role: "Senior Code Reviewer"
+  instruction: |
+    Review workflow YAML for missing fields and obvious mistakes.
+    Provide concise issue lists.
+
+memory:
+  strategy: "context"
+  files:
+    - "knowledge/guide.md"
+
+executables:
+  - name: "yaml_review"
+    description: "Check YAML text for required fields (basic lint)."
+    type: "script"
+    runner: "python3"
+    path: "scripts/yaml_review.py"
+    parameters:
+      type: object
+      properties:
+        yaml:
+          type: string
+      required:
+        - yaml
