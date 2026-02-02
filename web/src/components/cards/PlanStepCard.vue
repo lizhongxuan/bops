@@ -1,12 +1,9 @@
 <template>
   <div class="card plan-step-card">
-    <div class="card-title">{{ card.step_name || card.step_id || "步骤" }}</div>
-    <div class="meta">
-      <span class="status" :class="statusClass">{{ statusLabel }}</span>
-      <span v-if="card.step_id" class="meta-item">ID: {{ card.step_id }}</span>
-      <span v-if="card.agent_name || card.agent_role" class="meta-item">
-        {{ card.agent_name || "agent" }}<span v-if="card.agent_role"> · {{ card.agent_role }}</span>
-      </span>
+    <div class="line">
+      <span class="status" :class="statusClass">({{ statusLabel }})</span>
+      <span class="title">{{ card.step_name || card.step_id || "步骤" }}</span>
+      <span v-if="card.change_summary" class="summary"> · {{ card.change_summary }}</span>
     </div>
   </div>
 </template>
@@ -20,6 +17,7 @@ export type PlanStepCardPayload = {
   step_name?: string;
   step_status?: string;
   event_type?: string;
+  change_summary?: string;
   agent_name?: string;
   agent_role?: string;
   parent_step_id?: string;
@@ -33,6 +31,7 @@ const statusLabel = computed(() => {
   if (raw === "done" || raw === "success" || raw === "completed") return "已完成";
   if (raw === "failed" || raw === "error") return "失败";
   if (raw === "pending") return "待开始";
+  if (raw === "updated") return "已更新";
   return props.card.step_status || props.card.event_type || "";
 });
 
@@ -42,6 +41,7 @@ const statusClass = computed(() => {
   if (raw === "done" || raw === "success" || raw === "completed") return "done";
   if (raw === "failed" || raw === "error") return "error";
   if (raw === "pending") return "pending";
+  if (raw === "updated") return "updated";
   return "neutral";
 });
 </script>
@@ -54,54 +54,49 @@ const statusClass = computed(() => {
   padding: 12px;
 }
 
-.card-title {
-  font-weight: 600;
+.line {
   font-size: 13px;
-  margin-bottom: 8px;
-}
-
-.meta {
+  color: #2b2b2b;
   display: flex;
+  align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
-  font-size: 12px;
-  color: #4b4b4b;
+  gap: 6px;
 }
 
-.meta-item {
-  background: rgba(27, 27, 27, 0.04);
-  border-radius: 999px;
-  padding: 2px 8px;
+.title {
+  font-weight: 600;
+}
+
+.summary {
+  color: #6f6f6f;
+  font-size: 12px;
 }
 
 .status {
-  border-radius: 999px;
-  padding: 2px 8px;
   font-weight: 600;
 }
 
 .status.running {
-  background: rgba(52, 152, 219, 0.12);
   color: #2c73b8;
 }
 
 .status.done {
-  background: rgba(46, 204, 113, 0.12);
   color: #1f8e4f;
 }
 
 .status.error {
-  background: rgba(231, 76, 60, 0.12);
   color: #c0392b;
 }
 
 .status.pending {
-  background: rgba(149, 165, 166, 0.18);
   color: #6c7a7a;
 }
 
+.status.updated {
+  color: #7f8c8d;
+}
+
 .status.neutral {
-  background: rgba(127, 140, 141, 0.12);
   color: #6f6f6f;
 }
 </style>

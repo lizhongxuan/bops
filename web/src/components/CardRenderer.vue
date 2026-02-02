@@ -31,6 +31,7 @@ export type CardPayload = {
   step_id?: string;
   step_name?: string;
   step_status?: string;
+  change_summary?: string;
   round?: number;
   status?: string;
   message?: string;

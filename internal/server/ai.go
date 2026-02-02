@@ -1103,35 +1103,7 @@ func buildCardFromEvent(evt aiworkflow.Event, replyID string) (map[string]any, b
 			"step_name":      stepName,
 			"event_type":     eventType,
 			"step_status":    evt.Status,
-			"agent_name":     evt.AgentName,
-			"agent_role":     evt.AgentRole,
-			"parent_step_id": stepID,
-		}, true
-	case "subloop_round":
-		round := 0
-		if evt.Data != nil {
-			if value, ok := evt.Data["round"].(int); ok {
-				round = value
-			} else if value, ok := evt.Data["round"].(float64); ok {
-				round = int(value)
-			}
-		}
-		cardID := ""
-		if stepID != "" {
-			cardID = fmt.Sprintf("subloop-%s-%d", stepID, round)
-		} else {
-			cardID = fmt.Sprintf("subloop-%d-%d", round, time.Now().UnixNano())
-		}
-		return map[string]any{
-			"card_id":        cardID,
-			"reply_id":       replyID,
-			"card_type":      cardTypeSubloop,
-			"step_id":        stepID,
-			"step_name":      stepName,
-			"event_type":     eventType,
-			"round":          round,
-			"status":         evt.Status,
-			"message":        evt.Message,
+			"change_summary": summarizeStepChange(evt.Message, ""),
 			"agent_name":     evt.AgentName,
 			"agent_role":     evt.AgentRole,
 			"parent_step_id": stepID,
@@ -1146,14 +1118,21 @@ func buildCardFromEvent(evt aiworkflow.Event, replyID string) (map[string]any, b
 		if strings.TrimSpace(fragment) == "" {
 			return nil, false
 		}
-		cardID := fmt.Sprintf("patch-%s-%d", stepID, time.Now().UnixNano())
+		cardID := ""
+		if stepID != "" {
+			cardID = fmt.Sprintf("plan-step-%s", stepID)
+		} else {
+			cardID = fmt.Sprintf("plan-step-%d", time.Now().UnixNano())
+		}
 		return map[string]any{
 			"card_id":        cardID,
 			"reply_id":       replyID,
-			"card_type":      cardTypeYamlPatch,
+			"card_type":      cardTypePlanStep,
 			"step_id":        stepID,
 			"step_name":      stepName,
 			"event_type":     eventType,
+			"step_status":    "updated",
+			"change_summary": summarizeStepChange(evt.Message, fragment),
 			"yaml_fragment":  fragment,
 			"agent_name":     evt.AgentName,
 			"agent_role":     evt.AgentRole,
@@ -1162,6 +1141,40 @@ func buildCardFromEvent(evt aiworkflow.Event, replyID string) (map[string]any, b
 	default:
 		return nil, false
 	}
+}
+
+func summarizeStepChange(message string, fragment string) string {
+	trimmed := strings.TrimSpace(message)
+	if trimmed != "" {
+		return trimmed
+	}
+	if fragment == "" {
+		return "步骤更新"
+	}
+	lines := strings.Split(fragment, "\n")
+	stepName := ""
+	action := ""
+	for _, line := range lines {
+		trim := strings.TrimSpace(line)
+		if strings.HasPrefix(trim, "- name:") {
+			stepName = strings.TrimSpace(strings.TrimPrefix(trim, "- name:"))
+		} else if strings.HasPrefix(trim, "action:") {
+			action = strings.TrimSpace(strings.TrimPrefix(trim, "action:"))
+		}
+		if stepName != "" && action != "" {
+			break
+		}
+	}
+	if stepName != "" && action != "" {
+		return fmt.Sprintf("%s · %s", stepName, action)
+	}
+	if stepName != "" {
+		return stepName
+	}
+	if action != "" {
+		return action
+	}
+	return "步骤更新"
 }
 
 func buildStreamPluginFinishVerbose(evt aiworkflow.Event, replyID string, index int) (streamMessage, bool) {

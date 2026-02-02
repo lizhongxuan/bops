@@ -15,7 +15,7 @@
         <div class="chat-body" ref="chatBodyRef" @scroll="handleChatScroll">
           <ul class="timeline">
             <li v-for="entry in timelineEntries" :key="entry.id" :class="['timeline-item', entry.type]">
-              <div v-if="entry.type !== 'ui' && entry.type !== 'card'" class="timeline-header">
+              <div v-if="entry.type !== 'ui' && entry.type !== 'card' && entry.type !== 'function_call'" class="timeline-header">
                 <span class="timeline-badge" :class="entry.type">{{ entry.label }}</span>
                 <small v-if="entry.agentName || entry.agentRole" class="agent-tag">
                   {{ entry.agentName || 'agent' }}<span v-if="entry.agentRole"> · {{ entry.agentRole }}</span>
@@ -25,7 +25,7 @@
               <div v-if="entry.type === 'function_call'" class="function-call-card">
                 <FunctionCallPanel :items="entry.functionCalls || []" />
               </div>
-              <div v-else-if="entry.type === 'card'" class="card-entry">
+              <div v-else-if="entry.type === 'card'" class="card-entry" @click="openCardDetail(entry.card)">
                 <CardRenderer :card="entry.card || { card_type: 'unknown' }" />
               </div>
               <div v-else-if="entry.type === 'ui'" class="ui-resource-card">
@@ -71,6 +71,31 @@
             </li>
             <li v-if="false" class="timeline-item typing"></li>
           </ul>
+        </div>
+
+        <div v-if="selectedCardDetail" class="card-detail-panel">
+          <div class="card-detail-head">
+            <div class="card-detail-title">{{ cardDetailTitle }}</div>
+            <button class="card-detail-close" type="button" @click="closeCardDetail">&#10005;</button>
+          </div>
+          <div class="card-detail-body">
+            <div v-if="cardDetailStatus" class="card-detail-row">
+              <span class="label">状态</span>
+              <span class="value">{{ cardDetailStatus }}</span>
+            </div>
+            <div v-if="cardDetailSummary" class="card-detail-row">
+              <span class="label">变更</span>
+              <span class="value">{{ cardDetailSummary }}</span>
+            </div>
+            <div v-if="cardDetailAgent" class="card-detail-row">
+              <span class="label">Agent</span>
+              <span class="value">{{ cardDetailAgent }}</span>
+            </div>
+            <div v-if="cardDetailYaml" class="card-detail-section">
+              <div class="section-title">片段详情</div>
+              <pre class="yaml-preview">{{ cardDetailYaml }}</pre>
+            </div>
+          </div>
         </div>
 
         <div class="composer">
@@ -814,6 +839,7 @@ const loopMetrics = ref<LoopMetrics | null>(null);
 const questionOverrides = ref<string[]>([]);
 const humanConfirmed = ref(false);
 const confirmReason = ref("");
+const selectedCardDetail = ref<CardPayload | null>(null);
 const aiConfig = ref({
   configured: true,
   provider: "",
@@ -925,6 +951,38 @@ const recentProgressEvents = computed<ProgressEvent[]>(() =>
 );
 const syncBlocked = computed(() => !autoSync.value && (visualDirty.value || yamlDirty.value));
 const canShowIssues = computed(() => !syncBlocked.value);
+const cardDetailTitle = computed(() => {
+  const card = selectedCardDetail.value;
+  if (!card) return "";
+  if (typeof card.step_name === "string" && card.step_name.trim()) return card.step_name;
+  if (typeof card.step_id === "string" && card.step_id.trim()) return card.step_id;
+  if (typeof card.title === "string" && card.title.trim()) return card.title;
+  return "详情";
+});
+const cardDetailStatus = computed(() => {
+  const card = selectedCardDetail.value;
+  if (!card) return "";
+  const status = (card.step_status || card.status || card.event_type || "") as string;
+  return status;
+});
+const cardDetailSummary = computed(() => {
+  const card = selectedCardDetail.value;
+  if (!card) return "";
+  return typeof card.change_summary === "string" ? card.change_summary : "";
+});
+const cardDetailAgent = computed(() => {
+  const card = selectedCardDetail.value;
+  if (!card) return "";
+  const name = typeof card.agent_name === "string" ? card.agent_name : "";
+  const role = typeof card.agent_role === "string" ? card.agent_role : "";
+  if (name && role) return `${name} · ${role}`;
+  return name || role;
+});
+const cardDetailYaml = computed(() => {
+  const card = selectedCardDetail.value;
+  if (!card) return "";
+  return typeof card.yaml_fragment === "string" ? card.yaml_fragment : "";
+});
 
 let chatIndex = 0;
 let replyIndex = 0;
@@ -1009,6 +1067,7 @@ function resetWorkspaceState() {
   humanConfirmed.value = false;
   confirmReason.value = "";
   saveName.value = "";
+  selectedCardDetail.value = null;
   resetStreamState();
 }
 
@@ -1711,6 +1770,15 @@ function focusStepFromUI(index: number) {
       card.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }
   });
+}
+
+function openCardDetail(card?: CardPayload) {
+  if (!card) return;
+  selectedCardDetail.value = card;
+}
+
+function closeCardDetail() {
+  selectedCardDetail.value = null;
 }
 
 function handleUiAction(event: CustomEvent) {
@@ -3671,12 +3739,90 @@ function diffSummary(prev: string, next: string) {
   gap: 16px;
   min-height: 0;
   overflow: hidden;
+  position: relative;
 }
 
 .chat-body {
   flex: 1;
   min-height: 0;
   overflow: auto;
+}
+
+.card-detail-panel {
+  position: absolute;
+  top: 72px;
+  right: 16px;
+  width: 300px;
+  max-height: calc(100% - 140px);
+  border: 1px solid rgba(27, 27, 27, 0.08);
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.08);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  z-index: 2;
+}
+
+.card-detail-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.card-detail-title {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.card-detail-close {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 16px;
+}
+
+.card-detail-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow: auto;
+}
+
+.card-detail-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.card-detail-row .value {
+  color: var(--ink);
+}
+
+.card-detail-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.card-detail-section .section-title {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.yaml-preview {
+  margin: 0;
+  font-size: 12px;
+  white-space: pre-wrap;
+  font-family: "SFMono-Regular", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  background: rgba(27, 27, 27, 0.04);
+  border-radius: 10px;
+  padding: 8px;
 }
 
 .timeline {
@@ -3740,6 +3886,9 @@ function diffSummary(prev: string, next: string) {
 .timeline-item.function_call {
   align-self: stretch;
   max-width: 100%;
+  background: transparent;
+  border: none;
+  padding: 0;
 }
 
 .function-call-card {
@@ -3748,6 +3897,7 @@ function diffSummary(prev: string, next: string) {
 
 .card-entry {
   padding: 4px 0;
+  cursor: pointer;
 }
 
 .reasoning-content {

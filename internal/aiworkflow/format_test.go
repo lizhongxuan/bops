@@ -12,7 +12,7 @@ func TestExtractWorkflowYAMLFromJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extract yaml: %v", err)
 	}
-	if !containsAll(yamlText, []string{"version: v0.1", "name: demo", "action: cmd.run"}) {
+	if !containsAll(yamlText, []string{"version: v0.1", "steps:", "action: cmd.run"}) {
 		t.Fatalf("unexpected yaml output: %s", yamlText)
 	}
 	if len(questions) != 1 || questions[0] != "Which hosts?" {
@@ -26,7 +26,7 @@ func TestExtractWorkflowYAMLFromCodeBlock(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extract yaml: %v", err)
 	}
-	if !containsAll(yamlText, []string{"version: v0.1", "name: demo", "action: cmd.run"}) {
+	if !containsAll(yamlText, []string{"version: v0.1", "steps:", "action: cmd.run"}) {
 		t.Fatalf("unexpected yaml output: %s", yamlText)
 	}
 	if len(questions) != 0 {

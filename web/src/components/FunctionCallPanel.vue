@@ -1,24 +1,14 @@
 <template>
   <div class="function-panel">
-    <div v-if="agentLabel" class="function-header">Agent · {{ agentLabel }}</div>
     <div v-if="items.length === 0" class="function-empty">暂无执行步骤</div>
-    <details v-for="item in items" :key="item.callId" class="function-item" :open="item.status === 'running'">
-      <summary class="function-summary">
-        <span class="status" :class="item.status">{{ statusLabel(item.status) }}</span>
-        <span v-if="item.streamUuid && item.status === 'running'" class="stream-tag">流式中</span>
-        <span v-if="loopLabel(item)" class="loop-tag">{{ loopLabel(item) }}</span>
-        <span class="title">{{ item.title }}</span>
-      </summary>
-      <div v-if="item.content" class="function-body">
-        <pre>{{ formatContent(item.content) }}</pre>
-      </div>
-    </details>
+    <div v-for="item in items" :key="item.callId" class="function-row" :class="item.status">
+      <span class="status">{{ statusLabel(item.status) }}</span>
+      <span class="title">{{ item.title }}</span>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed } from "vue";
-
 export type FunctionCallUnit = {
   callId: string;
   title: string;
@@ -34,50 +24,12 @@ export type FunctionCallUnit = {
   agentRole?: string;
 };
 
-const props = defineProps<{ items: FunctionCallUnit[] }>();
-
-const agentLabel = computed(() => {
-  if (!props.items.length) return "";
-  const first = props.items[0];
-  const name = first.agentName || first.agentId || "";
-  const role = first.agentRole || "";
-  if (name && role) return `${name} · ${role}`;
-  return name || role || "";
-});
+defineProps<{ items: FunctionCallUnit[] }>();
 
 function statusLabel(status: FunctionCallUnit["status"]) {
   if (status === "running") return "执行中";
   if (status === "failed") return "失败";
   return "完成";
-}
-
-function loopLabel(item: FunctionCallUnit) {
-  if (!item.loopId && !item.iteration) return "";
-  const parts: string[] = [];
-  if (typeof item.iteration === "number") {
-    parts.push(`第${item.iteration}轮`);
-  }
-  if (item.loopId) {
-    parts.push(formatLoopId(item.loopId));
-  }
-  return parts.join(" / ");
-}
-
-function formatLoopId(loopId: string) {
-  if (loopId.length <= 12) return loopId;
-  return `${loopId.slice(0, 6)}...${loopId.slice(-4)}`;
-}
-
-function formatContent(content?: string) {
-  if (!content) return "";
-  const trimmed = content.trim();
-  if (!trimmed) return content;
-  try {
-    const parsed = JSON.parse(trimmed) as unknown;
-    return JSON.stringify(parsed, null, 2);
-  } catch {
-    return content;
-  }
 }
 </script>
 
@@ -85,16 +37,7 @@ function formatContent(content?: string) {
 .function-panel {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 8px 0;
-}
-
-.function-header {
-  font-size: 12px;
-  color: #5a5249;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  gap: 6px;
 }
 
 .function-empty {
@@ -102,84 +45,32 @@ function formatContent(content?: string) {
   color: #8c8c8c;
 }
 
-.function-item {
-  border: 1px solid #e6e3dc;
-  border-radius: 12px;
-  background: #fff;
-  padding: 8px 10px;
-}
-
-.function-summary {
+.function-row {
   display: flex;
   align-items: center;
   gap: 8px;
   font-size: 13px;
-  cursor: pointer;
-}
-
-.function-summary::-webkit-details-marker {
-  display: none;
+  color: #2b2b2b;
 }
 
 .status {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  border: 1px solid transparent;
+  font-weight: 600;
 }
 
-.status.running {
+.function-row.running .status {
   color: #1764d1;
-  border-color: rgba(23, 100, 209, 0.25);
-  background: rgba(23, 100, 209, 0.08);
 }
 
-.status.done {
+.function-row.done .status {
   color: #1f8a48;
-  border-color: rgba(31, 138, 72, 0.25);
-  background: rgba(31, 138, 72, 0.08);
 }
 
-.status.failed {
+.function-row.failed .status {
   color: #c2352b;
-  border-color: rgba(194, 53, 43, 0.25);
-  background: rgba(194, 53, 43, 0.08);
-}
-
-.stream-tag {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  border: 1px solid rgba(122, 92, 54, 0.25);
-  background: rgba(122, 92, 54, 0.08);
-  color: #7a5c36;
-}
-
-.loop-tag {
-  font-size: 11px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  border: 1px solid rgba(83, 90, 158, 0.25);
-  background: rgba(83, 90, 158, 0.08);
-  color: #535a9e;
 }
 
 .title {
   font-weight: 600;
   color: #2b2b2b;
-}
-
-.function-body {
-  margin-top: 8px;
-  border-top: 1px dashed #e6e3dc;
-  padding-top: 8px;
-}
-
-.function-body pre {
-  margin: 0;
-  font-family: "SFMono-Regular", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
-  font-size: 12px;
-  white-space: pre-wrap;
-  color: #3a3a3a;
 }
 </style>

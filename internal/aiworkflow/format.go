@@ -158,6 +158,7 @@ func extractWorkflowYAML(reply string) (string, []string, error) {
 	if jsonText := extractJSONBlock(trimmed); jsonText != "" {
 		workflowPayload, questions, err := parseWorkflowJSON(jsonText)
 		if err == nil {
+			workflowPayload = keepStepsOnly(workflowPayload)
 			workflowPayload = normalizeWorkflow(workflowPayload)
 			if out, err := marshalWorkflowYAML(workflowPayload); err == nil {
 				return out, questions, nil
@@ -168,7 +169,14 @@ func extractWorkflowYAML(reply string) (string, []string, error) {
 	if fallback == "" {
 		return "", nil, errors.New("unable to extract yaml")
 	}
-	return normalizeWorkflowYAML(fallback), nil, nil
+	if wf, err := workflow.Load([]byte(fallback)); err == nil {
+		wf = keepStepsOnly(wf)
+		wf = normalizeWorkflow(wf)
+		if out, err := marshalWorkflowYAML(wf); err == nil {
+			return out, nil, nil
+		}
+	}
+	return "", nil, errors.New("unable to extract yaml")
 }
 
 func mergeStepsIntoBase(baseYAML, updatedYAML string) string {
@@ -218,6 +226,30 @@ func stepsOnlyYAML(yamlText string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(data))
+}
+
+func normalizeStepsOnlyYAML(yamlText string) string {
+	trimmed := strings.TrimSpace(yamlText)
+	if trimmed == "" {
+		return ""
+	}
+	wf, err := workflow.Load([]byte(trimmed))
+	if err != nil {
+		return ""
+	}
+	wf = keepStepsOnly(wf)
+	wf = normalizeWorkflow(wf)
+	out, err := marshalWorkflowYAML(wf)
+	if err != nil {
+		return ""
+	}
+	return out
+}
+
+func keepStepsOnly(wf workflow.Workflow) workflow.Workflow {
+	return workflow.Workflow{
+		Steps: wf.Steps,
+	}
 }
 
 func extractJSONBlock(text string) string {

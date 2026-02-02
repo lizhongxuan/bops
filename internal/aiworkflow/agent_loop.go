@@ -305,7 +305,10 @@ func (p *Pipeline) runAgentLoop(ctx context.Context, state *State, opts RunOptio
 		case "final":
 			yamlText := strings.TrimSpace(action.YAML)
 			if yamlText != "" {
-				state.YAML = normalizeWorkflowYAML(yamlText)
+				state.YAML = normalizeStepsOnlyYAML(yamlText)
+				if strings.TrimSpace(state.YAML) == "" {
+					return state, fmt.Errorf("loop final output missing steps")
+				}
 				state.Questions = action.Questions
 				return state, nil
 			}
