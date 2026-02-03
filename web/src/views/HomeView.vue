@@ -1582,6 +1582,33 @@ function upsertCardEntry(card: CardPayload) {
   const cardType = typeof (card as Record<string, unknown>).card_type === "string"
     ? String((card as Record<string, unknown>).card_type)
     : "";
+  const eventType = typeof (card as Record<string, unknown>).event_type === "string"
+    ? String((card as Record<string, unknown>).event_type)
+    : "";
+  const isPlanProgress = cardType === "plan_step" && (eventType === "plan_step_start" || eventType === "plan_step_done");
+  if (isPlanProgress && eventType === "plan_step_done") {
+    const existingIndex = chatEntries.value.findIndex((entry) => entry.cardId === cardId);
+    if (existingIndex >= 0) {
+      chatEntries.value.splice(existingIndex, 1);
+    }
+    return;
+  }
+  if (cardType === "plan_step" && eventType === "review_done") {
+    const yamlText = typeof (card as Record<string, unknown>).yaml === "string"
+      ? String((card as Record<string, unknown>).yaml)
+      : "";
+    if (yamlText.trim()) {
+      const cleaned = stripTargetsFromYaml(yamlText);
+      const streamSessionId = activeStreamSessionId.value || chatSessionId.value;
+      const isCurrentSession = streamSessionId === chatSessionId.value;
+      if (isCurrentSession) {
+        applyAIGeneratedYaml(cleaned);
+      }
+      if (draftId.value) {
+        persistDraftSnapshotForSession(streamSessionId, draftId.value, cleaned);
+      }
+    }
+  }
   const label = cardType === "plan_step" ? "步骤"
     : cardType === "subloop" ? "子循环"
       : cardType === "yaml_patch" ? "片段"
@@ -1595,7 +1622,9 @@ function upsertCardEntry(card: CardPayload) {
       replyId,
       card
     });
-    void appendChatSessionCard(card, replyId);
+    if (!isPlanProgress) {
+      void appendChatSessionCard(card, replyId);
+    }
     return;
   }
   const existingIndex = chatEntries.value.findIndex((entry) => entry.cardId === cardId);
@@ -1607,7 +1636,9 @@ function upsertCardEntry(card: CardPayload) {
       cardId,
       card
     }));
-    void appendChatSessionCard(card, replyId);
+    if (!isPlanProgress) {
+      void appendChatSessionCard(card, replyId);
+    }
     return;
   }
   pushChatEntry({
@@ -1619,7 +1650,9 @@ function upsertCardEntry(card: CardPayload) {
     cardId,
     card
   });
-  void appendChatSessionCard(card, replyId);
+  if (!isPlanProgress) {
+    void appendChatSessionCard(card, replyId);
+  }
 }
 
 function breakThoughtSegment() {

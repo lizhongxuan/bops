@@ -45,8 +45,8 @@ steps:
 	if !strings.Contains(snap.YAML, "stepB") {
 		t.Fatalf("expected updated yaml to include stepB")
 	}
-	if strings.Contains(snap.YAML, "stepA") {
-		t.Fatalf("expected updated yaml to replace stepA")
+	if !strings.Contains(snap.YAML, "stepA") {
+		t.Fatalf("expected updated yaml to keep stepA")
 	}
 	if len(snap.History) != 1 {
 		t.Fatalf("expected history length 1, got %d", len(snap.History))

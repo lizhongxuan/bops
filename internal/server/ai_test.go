@@ -61,6 +61,34 @@ func (s *streamAI) ChatStream(_ context.Context, _ []ai.Message, onDelta func(ai
 	return s.workflowJSON, s.thought, nil
 }
 
+type streamSequence struct {
+	responses []string
+	thought   string
+	idx       int
+}
+
+func (s *streamSequence) Chat(_ context.Context, _ []ai.Message) (string, error) {
+	if s.idx >= len(s.responses) {
+		return "", errors.New("no response configured")
+	}
+	reply := s.responses[s.idx]
+	s.idx++
+	return reply, nil
+}
+
+func (s *streamSequence) ChatStream(_ context.Context, _ []ai.Message, onDelta func(ai.StreamDelta)) (string, string, error) {
+	if s.idx >= len(s.responses) {
+		return "", "", errors.New("no response configured")
+	}
+	reply := s.responses[s.idx]
+	s.idx++
+	if onDelta != nil {
+		onDelta(ai.StreamDelta{Thought: s.thought})
+		onDelta(ai.StreamDelta{Content: reply})
+	}
+	return reply, s.thought, nil
+}
+
 type streamRecorder struct {
 	header http.Header
 	body   bytes.Buffer
@@ -108,10 +136,9 @@ func newTestServer(t *testing.T) *Server {
 
 func TestAIWorkflowGenerate(t *testing.T) {
 	srv := newTestServer(t)
-	intentJSON := `{"goal":"install nginx","missing":[]}`
-	planJSON := `[{"step_name":"install","description":"install nginx","dependencies":[]}]`
-	workflowJSON := `{"workflow":{"version":"v0.1","name":"demo","steps":[{"name":"ok","action":"cmd.run","targets":["local"],"with":{"cmd":"echo hi"}}]}}`
-	stub := &stubSequence{responses: []string{intentJSON, planJSON, workflowJSON}}
+	planJSON := `{"plan":[{"step_name":"install nginx","description":"install packages","dependencies":[]}],"missing":[]}`
+	stepJSON := `{"step_name":"install nginx","action":"pkg.install","targets":["local"],"with":{"name":"nginx"},"summary":"install nginx"}`
+	stub := &stubSequence{responses: []string{planJSON, stepJSON}}
 	srv.aiClient = stub
 	workflow, err := aiworkflow.New(aiworkflow.Config{
 		Client:       stub,
@@ -148,7 +175,7 @@ func TestAIWorkflowGenerate(t *testing.T) {
 		t.Fatalf("expected system prompt to be included")
 	}
 	if !strings.Contains(stub.last[len(stub.last)-1].Content, "install nginx") {
-		t.Fatalf("expected user prompt to be included in last message")
+		t.Fatalf("expected plan step context to be included in last message")
 	}
 }
 
@@ -325,12 +352,11 @@ func TestBuildStreamMessageFromEvent(t *testing.T) {
 
 func TestAIWorkflowStreamSSEOrder(t *testing.T) {
 	srv := newTestServer(t)
-	intentJSON := `{"goal":"install nginx","missing":[]}`
-	workflowJSON := `{"workflow":{"version":"v0.1","name":"demo","steps":[{"name":"ok","action":"cmd.run","targets":["local"],"with":{"cmd":"echo hi"}}]}}`
-	streamClient := &streamAI{
-		intentJSON:   intentJSON,
-		workflowJSON: workflowJSON,
-		thought:      "thinking...",
+	planJSON := `{"plan":[{"step_name":"install nginx","description":"install packages","dependencies":[]}],"missing":[]}`
+	stepJSON := `{"step_name":"install nginx","action":"pkg.install","targets":["local"],"with":{"name":"nginx"},"summary":"install nginx"}`
+	streamClient := &streamSequence{
+		responses: []string{planJSON, stepJSON},
+		thought:   "thinking...",
 	}
 	workflow, err := aiworkflow.New(aiworkflow.Config{
 		Client:       streamClient,
@@ -354,9 +380,6 @@ func TestAIWorkflowStreamSSEOrder(t *testing.T) {
 	if !strings.Contains(output, "event: delta") {
 		t.Fatalf("expected delta event in stream")
 	}
-	if !strings.Contains(output, "\"channel\":\"answer\"") {
-		t.Fatalf("expected answer delta channel in stream")
-	}
 	if !strings.Contains(output, "\"channel\":\"reasoning\"") {
 		t.Fatalf("expected reasoning delta channel in stream")
 	}
@@ -366,23 +389,14 @@ func TestAIWorkflowStreamSSEOrder(t *testing.T) {
 	if !strings.Contains(output, "event: message") {
 		t.Fatalf("expected message event in stream")
 	}
-	if !strings.Contains(output, "\"type\":\"function_call\"") {
-		t.Fatalf("expected function_call message in stream")
+	if !strings.Contains(output, "\"type\":\"plan_ready\"") {
+		t.Fatalf("expected plan_ready message in stream")
 	}
-	if !strings.Contains(output, "\"type\":\"tool_response\"") {
-		t.Fatalf("expected tool_response message in stream")
+	if !strings.Contains(output, "event: card") {
+		t.Fatalf("expected card event in stream")
 	}
-	if !strings.Contains(output, "\"call_id\":\"generator\"") {
-		t.Fatalf("expected call_id in stream")
-	}
-	if !strings.Contains(output, "\"execute_display_name\"") {
-		t.Fatalf("expected execute_display_name in stream")
-	}
-	if !strings.Contains(output, "\"plugin_status\"") {
-		t.Fatalf("expected plugin_status in stream")
-	}
-	if !strings.Contains(output, "\"card_type\":\"file_create\"") {
-		t.Fatalf("expected file_create card in stream")
+	if !strings.Contains(output, "\"card_type\":\"plan_step\"") {
+		t.Fatalf("expected plan_step card in stream")
 	}
 	if !strings.Contains(output, "event: result") {
 		t.Fatalf("expected result event in stream")

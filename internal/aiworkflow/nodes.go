@@ -248,22 +248,18 @@ func (p *Pipeline) execute(ctx context.Context, state *State) (*State, error) {
 
 func (p *Pipeline) summarize(_ context.Context, state *State) (*State, error) {
 	logging.L().Debug("aiworkflow summarize start")
-	emitEvent(state, "summarizer", "start", "")
 	steps := countSteps(state.YAML)
 	issues := len(state.Issues)
 	state.Summary = fmt.Sprintf("steps=%d risk=%s issues=%d", steps, state.RiskLevel, issues)
-	emitEvent(state, "summarizer", "done", state.Summary)
 	logging.L().Debug("aiworkflow summarize done", zap.String("summary", state.Summary))
 	return state, nil
 }
 
 func (p *Pipeline) humanGate(_ context.Context, state *State) (*State, error) {
 	logging.L().Debug("aiworkflow human gate start")
-	emitEvent(state, "human_gate", "start", "")
 	if state.RiskLevel != RiskLevelLow || len(state.Issues) > 0 || !state.IsSuccess {
 		state.NeedsReview = true
 	}
-	emitEvent(state, "human_gate", "done", "")
 	logging.L().Debug("aiworkflow human gate done", zap.Bool("needs_review", state.NeedsReview))
 	return state, nil
 }

@@ -197,7 +197,42 @@ func mergeStepsIntoBase(baseYAML, updatedYAML string) string {
 		return trimmedUpdated
 	}
 	updatedWorkflow = normalizeWorkflow(updatedWorkflow)
-	baseWorkflow.Steps = updatedWorkflow.Steps
+	if len(updatedWorkflow.Steps) > 0 {
+		updatedByName := make(map[string]workflow.Step, len(updatedWorkflow.Steps))
+		for _, step := range updatedWorkflow.Steps {
+			if strings.TrimSpace(step.Name) == "" {
+				continue
+			}
+			updatedByName[step.Name] = step
+		}
+		merged := make([]workflow.Step, 0, len(baseWorkflow.Steps)+len(updatedWorkflow.Steps))
+		seen := make(map[string]struct{}, len(updatedByName))
+		for _, step := range baseWorkflow.Steps {
+			name := strings.TrimSpace(step.Name)
+			if name == "" {
+				merged = append(merged, step)
+				continue
+			}
+			if updated, ok := updatedByName[name]; ok {
+				merged = append(merged, updated)
+				seen[name] = struct{}{}
+				continue
+			}
+			merged = append(merged, step)
+		}
+		for _, step := range updatedWorkflow.Steps {
+			name := strings.TrimSpace(step.Name)
+			if name == "" {
+				continue
+			}
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			merged = append(merged, step)
+			seen[name] = struct{}{}
+		}
+		baseWorkflow.Steps = merged
+	}
 	out, err := marshalWorkflowYAML(baseWorkflow)
 	if err != nil {
 		return trimmedUpdated

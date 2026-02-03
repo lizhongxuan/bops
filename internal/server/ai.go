@@ -397,12 +397,21 @@ func (s *Server) handleAIWorkflowGenerate(w http.ResponseWriter, r *http.Request
 	if baseYAML != "" && countStepsInYAML(baseYAML) == 0 {
 		baseYAML = ""
 	}
-	state, err := s.aiWorkflow.RunGenerate(r.Context(), strings.TrimSpace(req.Prompt), req.Context, aiworkflow.RunOptions{
+	// legacy pipeline entry (RunGenerate) is intentionally disabled in favor of RunMultiCreate.
+	// state, err := s.aiWorkflow.RunGenerate(r.Context(), strings.TrimSpace(req.Prompt), req.Context, aiworkflow.RunOptions{
+	// 	SystemPrompt:  s.systemPrompt(contextText),
+	// 	ContextText:   contextText,
+	// 	ValidationEnv: s.defaultValidationEnv(),
+	// 	SkipExecute:   true,
+	// 	BaseYAML:      baseYAML,
+	// })
+	state, err := s.aiWorkflow.RunMultiCreate(r.Context(), strings.TrimSpace(req.Prompt), req.Context, aiworkflow.RunOptions{
 		SystemPrompt:  s.systemPrompt(contextText),
 		ContextText:   contextText,
 		ValidationEnv: s.defaultValidationEnv(),
 		SkipExecute:   true,
 		BaseYAML:      baseYAML,
+		DraftID:       strings.TrimSpace(req.DraftID),
 	})
 	if err != nil {
 		writeError(w, r, http.StatusBadRequest, err.Error())
@@ -659,12 +668,12 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 		if len(req.Agents) > 0 {
 			agentMode = "multi"
 		} else if mode == string(aiworkflow.ModeGenerate) {
-			agentMode = "loop"
+			agentMode = "multi_create"
 		} else {
 			agentMode = "pipeline"
 		}
 	}
-	if agentMode != "loop" && agentMode != "multi" {
+	if agentMode != "loop" && agentMode != "multi" && agentMode != "multi_create" {
 		agentMode = "pipeline"
 	}
 	if mode == string(aiworkflow.ModeFix) {
@@ -825,7 +834,9 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 		} else if strings.TrimSpace(req.AgentName) != "" {
 			state, runErr = s.aiWorkflow.RunAgent(ctx, strings.TrimSpace(req.Prompt), req.Context, opts)
 		} else {
-			state, runErr = s.aiWorkflow.RunGenerate(ctx, strings.TrimSpace(req.Prompt), req.Context, opts)
+			// legacy pipeline entry (RunGenerate) is intentionally disabled in favor of RunMultiCreate.
+			// state, runErr = s.aiWorkflow.RunGenerate(ctx, strings.TrimSpace(req.Prompt), req.Context, opts)
+			state, runErr = s.aiWorkflow.RunMultiCreate(ctx, strings.TrimSpace(req.Prompt), req.Context, opts)
 		}
 		resultCh <- streamResult{state: state, err: runErr}
 	}()
@@ -869,7 +880,7 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 								"card_id":   "file-create",
 								"reply_id":  replyID,
 								"card_type": cardTypeFileCreate,
-								"title":     "创建文件",
+								"title":     "创建工作流文件",
 								"files": []map[string]string{
 									{
 										"path":     "workflow.yaml",
@@ -890,7 +901,7 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 								"card_id":   "file-create",
 								"reply_id":  replyID,
 								"card_type": cardTypeFileCreate,
-								"title":     "创建文件",
+								"title":     "修改工作流文件",
 								"files": []map[string]string{
 									{
 										"path":     "workflow.yaml",
@@ -985,7 +996,7 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 							"card_id":   "file-create",
 							"reply_id":  replyID,
 							"card_type": cardTypeFileCreate,
-							"title":     "创建文件",
+							"title":     "创建工作流文件",
 							"files": []map[string]string{
 								{
 									"path":     path,
@@ -1239,18 +1250,21 @@ func buildCardFromEvent(evt aiworkflow.Event, replyID string) (map[string]any, b
 	stepID := strings.TrimSpace(evt.ParentStepID)
 	stepName := ""
 	if evt.Data != nil {
+		if stepID == "" {
+			if value, ok := evt.Data["step_id"].(string); ok {
+				stepID = strings.TrimSpace(value)
+			}
+		}
 		if value, ok := evt.Data["step_name"].(string); ok {
 			stepName = value
 		}
 	}
+	if stepID == "" && strings.TrimSpace(stepName) != "" {
+		stepID = strings.TrimSpace(stepName)
+	}
 	switch eventType {
 	case "plan_step_start", "plan_step_done":
-		cardID := ""
-		if stepID != "" {
-			cardID = fmt.Sprintf("plan-step-%s", stepID)
-		} else {
-			cardID = fmt.Sprintf("plan-step-%d", time.Now().UnixNano())
-		}
+		cardID := "plan-step-current"
 		return map[string]any{
 			"card_id":        cardID,
 			"reply_id":       replyID,
@@ -1281,6 +1295,16 @@ func buildCardFromEvent(evt aiworkflow.Event, replyID string) (map[string]any, b
 				issues = value
 			}
 		}
+		var stepPatch any
+		var yamlText string
+		if evt.Data != nil {
+			if value, ok := evt.Data["step_patch"]; ok {
+				stepPatch = value
+			}
+			if value, ok := evt.Data["yaml"].(string); ok {
+				yamlText = value
+			}
+		}
 		stepStatus := evt.Status
 		if eventType == "step_patch_created" {
 			stepStatus = "updated"
@@ -1295,6 +1319,8 @@ func buildCardFromEvent(evt aiworkflow.Event, replyID string) (map[string]any, b
 			"step_status":    stepStatus,
 			"change_summary": summarizeStepChange(evt.Message, ""),
 			"issues":         issues,
+			"step_patch":     stepPatch,
+			"yaml":           yamlText,
 			"agent_name":     evt.AgentName,
 			"agent_role":     evt.AgentRole,
 			"parent_step_id": stepID,

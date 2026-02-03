@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"sync"
 	"time"
 
 	"bops/internal/ai"
@@ -59,10 +58,28 @@ func (p *Pipeline) RunMultiCreate(ctx context.Context, prompt string, context ma
 		emitCustomEvent(state, "coordinator_error", "error", err.Error(), nil)
 		return state, err
 	}
-	if len(missing) > 0 {
+	askQuestions := len(missing) > 0 && shouldAskQuestions(state.Prompt)
+	if askQuestions {
+		if len(plan) == 0 {
+			plan = buildFallbackPlan(state.Prompt)
+		}
+		state.Plan = plan
+		draftStore.UpdatePlan(draftID, plan)
+		emitCustomEvent(state, "plan_ready", "done", "plan ready", map[string]any{
+			"plan": plan,
+		})
+		emitPlanSteps(state)
 		state.Questions = buildQuestionsFromMissing(missing)
 		emitEvent(state, "question_gate", "done", "awaiting missing inputs")
 		return state, nil
+	}
+	if len(missing) > 0 {
+		logging.L().Info("coordinator missing ignored",
+			zap.Int("missing", len(missing)),
+		)
+	}
+	if len(plan) == 0 {
+		plan = buildFallbackPlan(state.Prompt)
 	}
 	state.Plan = plan
 	draftStore.UpdatePlan(draftID, plan)
@@ -71,33 +88,23 @@ func (p *Pipeline) RunMultiCreate(ctx context.Context, prompt string, context ma
 	})
 
 	for i := range state.Plan {
-		step := &state.Plan[i]
+		step := state.Plan[i]
 		if strings.TrimSpace(step.ID) == "" {
 			step.ID = normalizePlanID(step.StepName, i)
+			state.Plan[i].ID = step.ID
 		}
-		if step.Status == "" {
-			step.Status = StepStatusPending
-		}
+		state.Plan[i].Status = StepStatusInProgress
+		setStepStatus(state, step.ID, StepStatusInProgress)
 		state.AgentName = "Coordinator"
 		state.AgentRole = "coordinator"
-		emitStepEvent(state, "plan_step_start", *step, "start", "plan step", nil)
-		emitStepEvent(state, "plan_step_done", *step, "done", "plan step", nil)
-	}
+		emitStepEvent(state, "plan_step_start", step, "start", "plan step", nil)
 
-	reviewQueue := make(chan ReviewTask, len(state.Plan))
-	var reviewerWG sync.WaitGroup
-	reviewerWG.Add(1)
-	go func() {
-		defer reviewerWG.Done()
-		p.reviewWorker(ctx, state, draftStore, draftID, reviewQueue, opts)
-	}()
-
-	for i := range state.Plan {
-		step := state.Plan[i]
 		state.AgentName = "Coder"
 		state.AgentRole = "coder"
 		patch, err := p.runCoderStep(ctx, step, state, systemPrompt)
 		if err != nil {
+			state.Plan[i].Status = StepStatusFailed
+			setStepStatus(state, step.ID, StepStatusFailed)
 			emitStepEvent(state, "step_patch_created", step, "error", err.Error(), nil)
 			return state, err
 		}
@@ -112,11 +119,23 @@ func (p *Pipeline) RunMultiCreate(ctx context.Context, prompt string, context ma
 		emitStepEvent(state, "step_patch_created", step, "done", patch.Summary, map[string]any{
 			"step_patch": patch,
 		})
-		reviewQueue <- ReviewTask{StepID: patch.StepID, Patch: patch, Attempt: 0, Status: "pending"}
+
+		reviewResult := p.reviewStep(ctx, state, draftStore, draftID, ReviewTask{
+			StepID: patch.StepID,
+			Patch:  patch,
+			Status: "pending",
+		}, opts)
+		if reviewResult.Status == StepStatusFailed {
+			state.Plan[i].Status = StepStatusFailed
+			setStepStatus(state, step.ID, StepStatusFailed)
+			emitStepEvent(state, "plan_step_done", step, "error", reviewResult.Summary, nil)
+			continue
+		}
+		state.Plan[i].Status = StepStatusDone
+		setStepStatus(state, step.ID, StepStatusDone)
+		emitStepEvent(state, "plan_step_done", step, "done", reviewResult.Summary, nil)
 	}
 	emitCustomEvent(state, "coder_done", "done", "coder completed", nil)
-	close(reviewQueue)
-	reviewerWG.Wait()
 
 	finalYAML, err := buildFinalYAML(draftStore.Snapshot(draftID))
 	if err != nil {
@@ -152,6 +171,85 @@ func (p *Pipeline) RunMultiCreate(ctx context.Context, prompt string, context ma
 	return state, nil
 }
 
+func emitPlanSteps(state *State) {
+	if state == nil {
+		return
+	}
+	for i := range state.Plan {
+		step := &state.Plan[i]
+		if strings.TrimSpace(step.ID) == "" {
+			step.ID = normalizePlanID(step.StepName, i)
+		}
+		if step.Status == "" {
+			step.Status = StepStatusPending
+		}
+		state.AgentName = "Coordinator"
+		state.AgentRole = "coordinator"
+		emitStepEvent(state, "plan_step_start", *step, "start", "plan step", nil)
+		emitStepEvent(state, "plan_step_done", *step, "done", "plan step", nil)
+	}
+}
+
+func buildFallbackPlan(prompt string) []PlanStep {
+	desc := strings.TrimSpace(prompt)
+	if desc == "" {
+		desc = "生成可执行的工作流步骤"
+	}
+	steps := []PlanStep{
+		{
+			StepName:    "生成工作流步骤",
+			Description: desc,
+		},
+	}
+	return normalizePlanSteps(steps)
+}
+
+func shouldAskQuestions(prompt string) bool {
+	trimmed := strings.TrimSpace(prompt)
+	if trimmed == "" {
+		return false
+	}
+	normalized := strings.ToLower(trimmed)
+	triggers := []string{
+		"需要补充",
+		"需要什么信息",
+		"需要哪些信息",
+		"你需要什么",
+		"你需要哪些",
+		"缺什么信息",
+		"还缺什么",
+		"还需要什么",
+		"请问我需要",
+		"请问需要",
+		"你还要",
+		"请问还要",
+		"不清楚",
+		"不确定",
+		"不知道",
+		"你问我",
+		"问我",
+		"请提问",
+		"请先确认",
+		"帮我确认",
+		"请确认",
+		"需要确认",
+		"确认一下",
+		"需要哪些参数",
+		"要哪些参数",
+		"ask me",
+		"what info",
+		"what information",
+		"need more info",
+		"missing info",
+	}
+	for _, trigger := range triggers {
+		if strings.Contains(normalized, trigger) {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *Pipeline) runCoordinator(ctx context.Context, state *State, systemPrompt string) ([]PlanStep, []string, error) {
 	if p.cfg.Client == nil {
 		return nil, nil, errors.New("ai client is not configured")
@@ -181,6 +279,7 @@ func buildCoordinatorPrompt(prompt, contextText string) string {
 	builder := strings.Builder{}
 	builder.WriteString("You are a workflow coordinator. Return JSON only.\n")
 	builder.WriteString("Output format: {\"plan\":[{\"step_name\":\"...\",\"description\":\"...\",\"dependencies\":[]}],\"missing\":[]}\n")
+	builder.WriteString("Do not ask for missing information unless the user explicitly requests questions; assume reasonable defaults and keep missing empty.\n")
 	if contextText != "" {
 		builder.WriteString("Context:\n")
 		builder.WriteString(contextText)
@@ -261,92 +360,105 @@ func buildCoderPrompt(step PlanStep, contextText string) string {
 
 func (p *Pipeline) reviewWorker(ctx context.Context, state *State, store *DraftStore, draftID string, tasks <-chan ReviewTask, opts RunOptions) {
 	for task := range tasks {
-		reviewStart := time.Now()
-		stepID := task.StepID
-		state.AgentName = "Reviewer"
-		state.AgentRole = "reviewer"
-		emitCustomEvent(state, "review_start", "start", "review start", map[string]any{
+		p.reviewStep(ctx, state, store, draftID, task, opts)
+	}
+}
+
+func (p *Pipeline) reviewStep(ctx context.Context, state *State, store *DraftStore, draftID string, task ReviewTask, opts RunOptions) ReviewResult {
+	reviewStart := time.Now()
+	stepID := task.StepID
+	state.AgentName = "Reviewer"
+	state.AgentRole = "reviewer"
+	emitCustomEvent(state, "review_start", "start", "review start", map[string]any{
+		"step_id":   stepID,
+		"step_name": task.Patch.StepName,
+	})
+	patch := task.Patch
+	issues := validateStepPatch(patch)
+	if len(issues) > 0 {
+		fixed, err := p.runReviewerFix(ctx, patch, issues, "", opts)
+		if err == nil {
+			patch = fixed
+			issues = validateStepPatch(patch)
+			emitCustomEvent(state, "review_update", "done", patch.Summary, map[string]any{
+				"step_id":   stepID,
+				"step_name": patch.StepName,
+			})
+		}
+	}
+	execIssues := []string{}
+	if opts.ValidationEnv != nil && !opts.SkipExecute {
+		emitCustomEvent(state, "validation_start", "start", "validation start", map[string]any{
 			"step_id":   stepID,
-			"step_name": task.Patch.StepName,
+			"step_name": patch.StepName,
 		})
-		patch := task.Patch
-		issues := validateStepPatch(patch)
-		if len(issues) > 0 {
-			fixed, err := p.runReviewerFix(ctx, patch, issues, "", opts)
-			if err == nil {
+		validationStart := time.Now()
+		execIssues = p.runStepValidation(ctx, patch, opts)
+		store.AddMetric(draftID, "validation_duration_ms", int(time.Since(validationStart).Milliseconds()))
+		emitCustomEvent(state, "validation_done", "done", "validation done", map[string]any{
+			"step_id":   stepID,
+			"step_name": patch.StepName,
+			"issues":    execIssues,
+		})
+		if len(execIssues) > 0 {
+			for attempt := 0; attempt < 3 && len(execIssues) > 0; attempt++ {
+				store.AddMetric(draftID, "validation_retries", 1)
+				fixed, err := p.runReviewerFix(ctx, patch, execIssues, strings.Join(execIssues, "; "), opts)
+				if err != nil {
+					break
+				}
 				patch = fixed
-				issues = validateStepPatch(patch)
 				emitCustomEvent(state, "review_update", "done", patch.Summary, map[string]any{
 					"step_id":   stepID,
 					"step_name": patch.StepName,
 				})
+				validationStart := time.Now()
+				execIssues = p.runStepValidation(ctx, patch, opts)
+				store.AddMetric(draftID, "validation_duration_ms", int(time.Since(validationStart).Milliseconds()))
 			}
 		}
-		execIssues := []string{}
-		if opts.ValidationEnv != nil && !opts.SkipExecute {
-			emitCustomEvent(state, "validation_start", "start", "validation start", map[string]any{
-				"step_id":   stepID,
-				"step_name": patch.StepName,
-			})
-			validationStart := time.Now()
-			execIssues = p.runStepValidation(ctx, patch, opts)
-			store.AddMetric(draftID, "validation_duration_ms", int(time.Since(validationStart).Milliseconds()))
-			emitCustomEvent(state, "validation_done", "done", "validation done", map[string]any{
-				"step_id":   stepID,
-				"step_name": patch.StepName,
-				"issues":    execIssues,
-			})
-			if len(execIssues) > 0 {
-				for attempt := 0; attempt < 3 && len(execIssues) > 0; attempt++ {
-					store.AddMetric(draftID, "validation_retries", 1)
-					fixed, err := p.runReviewerFix(ctx, patch, execIssues, strings.Join(execIssues, "; "), opts)
-					if err != nil {
-						break
-					}
-					patch = fixed
-					emitCustomEvent(state, "review_update", "done", patch.Summary, map[string]any{
-						"step_id":   stepID,
-						"step_name": patch.StepName,
-					})
-					validationStart := time.Now()
-					execIssues = p.runStepValidation(ctx, patch, opts)
-					store.AddMetric(draftID, "validation_duration_ms", int(time.Since(validationStart).Milliseconds()))
-				}
-			}
-		}
-		store.UpdateStep(draftID, patch)
-		result := ReviewResult{
-			StepID:   stepID,
-			Status:   StepStatusDone,
-			Summary:  patch.Summary,
-			Issues:   append(issues, execIssues...),
-			Attempts: task.Attempt + 1,
-		}
-		if len(result.Issues) > 0 {
-			result.Status = StepStatusFailed
-		}
-		store.UpdateReview(draftID, result)
-		store.AddMetric(draftID, "review_duration_ms", int(time.Since(reviewStart).Milliseconds()))
-		if task.Attempt > 0 {
-			store.AddMetric(draftID, "review_retries", task.Attempt)
-		}
-		logging.L().Info("review done",
-			zap.String("draft_id", draftID),
-			zap.String("step_id", stepID),
-			zap.String("status", string(result.Status)),
-			zap.Int("issues", len(result.Issues)),
-			zap.Duration("duration", time.Since(reviewStart)),
-		)
-		status := "done"
-		if result.Status == StepStatusFailed {
-			status = "error"
-		}
-		emitCustomEvent(state, "review_done", status, patch.Summary, map[string]any{
-			"step_id":   stepID,
-			"step_name": patch.StepName,
-			"issues":    result.Issues,
-		})
 	}
+	store.UpdateStep(draftID, patch)
+	result := ReviewResult{
+		StepID:   stepID,
+		Status:   StepStatusDone,
+		Summary:  patch.Summary,
+		Issues:   append(issues, execIssues...),
+		Attempts: task.Attempt + 1,
+	}
+	if len(result.Issues) > 0 {
+		result.Status = StepStatusFailed
+	}
+	store.UpdateReview(draftID, result)
+	store.AddMetric(draftID, "review_duration_ms", int(time.Since(reviewStart).Milliseconds()))
+	if task.Attempt > 0 {
+		store.AddMetric(draftID, "review_retries", task.Attempt)
+	}
+	var yamlText string
+	if snapshot := store.Snapshot(draftID); snapshot.DraftID != "" {
+		if next, err := buildFinalYAML(snapshot); err == nil {
+			yamlText = next
+		}
+	}
+	logging.L().Info("review done",
+		zap.String("draft_id", draftID),
+		zap.String("step_id", stepID),
+		zap.String("status", string(result.Status)),
+		zap.Int("issues", len(result.Issues)),
+		zap.Duration("duration", time.Since(reviewStart)),
+	)
+	status := "done"
+	if result.Status == StepStatusFailed {
+		status = "error"
+	}
+	emitCustomEvent(state, "review_done", status, patch.Summary, map[string]any{
+		"step_id":   stepID,
+		"step_name": patch.StepName,
+		"issues":    result.Issues,
+		"step_patch": patch,
+		"yaml":       yamlText,
+	})
+	return result
 }
 
 func (p *Pipeline) runReviewerFix(ctx context.Context, patch StepPatch, issues []string, execError string, opts RunOptions) (StepPatch, error) {
