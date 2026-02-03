@@ -3503,26 +3503,7 @@ function applyResult(payload: Record<string, unknown>): StreamReply | null {
       persistDraftSnapshotForSession(streamSessionId, payload.draft_id, cleaned);
     }
   }
-  const planSteps = Array.isArray(payload.plan) ? payload.plan : [];
-  if (planSteps.length && !planShownInStream.value) {
-    const lines = planSteps
-      .map((step, index) => {
-        const item = step as Record<string, unknown>;
-        const name = typeof item.step_name === "string" ? item.step_name : `step-${index + 1}`;
-        const desc = typeof item.description === "string" ? item.description : "";
-        const deps = Array.isArray(item.dependencies) ? item.dependencies.filter((d) => typeof d === "string") : [];
-        const depText = deps.length ? ` (依赖: ${deps.join(", ")})` : "";
-        return `${index + 1}. ${name}${desc ? ` - ${desc}` : ""}${depText}`;
-      })
-      .join("\n");
-    pushChatEntry({
-      label: "计划",
-      body: lines,
-      type: "ai",
-      extra: "PLAN"
-    });
-    planShownInStream.value = true;
-  }
+  // plan is rendered from plan_ready message; avoid duplicate plan rendering here.
   const summaries = Array.isArray(payload.subagent_summaries) ? payload.subagent_summaries : [];
   if (summaries.length) {
     const lines = summaries
@@ -4207,6 +4188,9 @@ function diffSummary(prev: string, next: string) {
 .timeline-item.card {
   align-self: stretch;
   max-width: 100%;
+  background: transparent;
+  border: none;
+  padding: 0;
 }
 
 .timeline-item.function_call {
@@ -4222,7 +4206,7 @@ function diffSummary(prev: string, next: string) {
 }
 
 .card-entry {
-  padding: 4px 0;
+  padding: 0;
   cursor: pointer;
 }
 
