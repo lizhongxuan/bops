@@ -14,60 +14,64 @@
 
         <div class="chat-body" ref="chatBodyRef" @scroll="handleChatScroll">
           <ul class="timeline">
-            <li v-for="entry in timelineEntries" :key="entry.id" :class="['timeline-item', entry.type]">
-              <div v-if="entry.type !== 'ui' && entry.type !== 'card' && entry.type !== 'function_call'" class="timeline-header">
-                <span class="timeline-badge" :class="entry.type">{{ entry.label }}</span>
-                <small v-if="entry.agentName || entry.agentRole" class="agent-tag">
-                  {{ entry.agentName || 'agent' }}<span v-if="entry.agentRole"> · {{ entry.agentRole }}</span>
-                </small>
-                <small v-if="entry.extra">{{ entry.extra }}</small>
-              </div>
-              <div v-if="entry.type === 'function_call'" class="function-call-card">
-                <FunctionCallPanel :items="entry.functionCalls || []" />
-              </div>
-              <div v-else-if="entry.type === 'card'" class="card-entry" @click="openCardDetail(entry.card)">
-                <CardRenderer :card="entry.card || { card_type: 'unknown' }" />
-              </div>
-              <div v-else-if="entry.type === 'ui'" class="ui-resource-card">
-                <div class="ui-resource-content">
-                  <ui-resource-renderer
-                    v-if="mcpUiReady"
-                    :resource.prop="entry.resource"
-                    :htmlProps.prop="{ autoResizeIframe: { height: true } }"
-                    class="ui-resource-host"
-                  ></ui-resource-renderer>
-                  <iframe
-                    v-else-if="isHtmlResource(entry.resource)"
-                    class="ui-resource-frame"
-                    :srcdoc="entry.resource?.text || ''"
-                    sandbox="allow-scripts allow-same-origin"
-                  ></iframe>
-                  <a
-                    v-else-if="isUriResource(entry.resource)"
-                    class="ui-resource-link"
-                    :href="entry.resource?.text"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    Open UI Resource
-                  </a>
-                  <div v-else class="ui-resource-fallback">UI resource unavailable.</div>
-                </div>
-              </div>
-              <div v-else class="text-entry">
-                <div v-if="entry.type === 'ai' && entry.reasoning" class="reasoning-content">
-                  <details class="reasoning-toggle">
-                    <summary>思考过程</summary>
-                    <p v-if="entry.reasoning">{{ entry.reasoning }}</p>
-                  </details>
-                </div>
-                <p v-if="entry.body">{{ entry.body }}</p>
-              </div>
-              <div v-if="entry.actionLabel" class="timeline-actions">
-                <button class="btn ghost btn-sm" type="button" @click="handleEntryAction(entry.action)">
-                  {{ entry.actionLabel }}
-                </button>
-              </div>
+            <li v-for="group in chatGroups" :key="group.replyId" class="timeline-group">
+              <ul class="timeline-group-list">
+                <li v-for="entry in group.entries" :key="entry.id" :class="['timeline-item', entry.type]">
+                  <div v-if="entry.type !== 'ui' && entry.type !== 'card' && entry.type !== 'function_call'" class="timeline-header">
+                    <span class="timeline-badge" :class="entry.type">{{ entry.label }}</span>
+                    <small v-if="entry.agentName || entry.agentRole" class="agent-tag">
+                      {{ entry.agentName || 'agent' }}<span v-if="entry.agentRole"> · {{ entry.agentRole }}</span>
+                    </small>
+                    <small v-if="entry.extra">{{ entry.extra }}</small>
+                  </div>
+                  <div v-if="entry.type === 'function_call'" class="function-call-card">
+                    <FunctionCallPanel :items="entry.functionCalls || []" />
+                  </div>
+                  <div v-else-if="entry.type === 'card'" class="card-entry" @click="openCardDetail(entry.card)">
+                    <CardRenderer :card="entry.card || { card_type: 'unknown' }" />
+                  </div>
+                  <div v-else-if="entry.type === 'ui'" class="ui-resource-card">
+                    <div class="ui-resource-content">
+                      <ui-resource-renderer
+                        v-if="mcpUiReady"
+                        :resource.prop="entry.resource"
+                        :htmlProps.prop="{ autoResizeIframe: { height: true } }"
+                        class="ui-resource-host"
+                      ></ui-resource-renderer>
+                      <iframe
+                        v-else-if="isHtmlResource(entry.resource)"
+                        class="ui-resource-frame"
+                        :srcdoc="entry.resource?.text || ''"
+                        sandbox="allow-scripts allow-same-origin"
+                      ></iframe>
+                      <a
+                        v-else-if="isUriResource(entry.resource)"
+                        class="ui-resource-link"
+                        :href="entry.resource?.text"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        Open UI Resource
+                      </a>
+                      <div v-else class="ui-resource-fallback">UI resource unavailable.</div>
+                    </div>
+                  </div>
+                  <div v-else class="text-entry">
+                    <div v-if="entry.type === 'ai' && entry.reasoning" class="reasoning-content">
+                      <details class="reasoning-toggle">
+                        <summary>思考过程</summary>
+                        <p v-if="entry.reasoning">{{ entry.reasoning }}</p>
+                      </details>
+                    </div>
+                    <p v-if="entry.body">{{ entry.body }}</p>
+                  </div>
+                  <div v-if="entry.actionLabel" class="timeline-actions">
+                    <button class="btn ghost btn-sm" type="button" @click="handleEntryAction(entry.action)">
+                      {{ entry.actionLabel }}
+                    </button>
+                  </div>
+                </li>
+              </ul>
             </li>
             <li v-if="false" class="timeline-item typing"></li>
           </ul>
@@ -728,6 +732,29 @@ type ChatSession = {
   created_at?: string;
   updated_at?: string;
   messages: ChatSessionMessage[];
+  cards?: ChatSessionCard[];
+  timeline?: ChatSessionTimelineEntry[];
+};
+
+type ChatSessionCard = {
+  id: string;
+  card_id?: string;
+  reply_id?: string;
+  card_type?: string;
+  payload?: CardPayload;
+  created_at?: string;
+};
+
+type ChatSessionTimelineEntry = {
+  id: string;
+  type: "message" | "card";
+  role?: string;
+  content?: string;
+  card_id?: string;
+  reply_id?: string;
+  card_type?: string;
+  payload?: CardPayload;
+  created_at?: string;
 };
 
 type ChatSessionSummary = {
@@ -846,6 +873,8 @@ const questionOverrides = ref<string[]>([]);
 const humanConfirmed = ref(false);
 const confirmReason = ref("");
 const selectedCardDetail = ref<CardPayload | null>(null);
+const activeStreamSessionId = ref<string | null>(null);
+const streamAbortController = ref<AbortController | null>(null);
 const aiConfig = ref({
   configured: true,
   provider: "",
@@ -907,7 +936,8 @@ const chatGroups = computed<ChatGroup[]>(() => {
   const order: string[] = [];
   const map = new Map<string, ChatEntry[]>();
   chatEntries.value.forEach((entry) => {
-    const key = entry.replyId || entry.id;
+    const replyId = entry.replyId || entry.id;
+    const key = replyId.includes(":") ? replyId.split(":")[0] : replyId;
     if (!map.has(key)) {
       map.set(key, []);
       order.push(key);
@@ -919,7 +949,6 @@ const chatGroups = computed<ChatGroup[]>(() => {
     entries: map.get(key) || []
   }));
 });
-const timelineEntries = computed(() => chatGroups.value.flatMap((group) => group.entries));
 const requiresReason = computed(() => summary.value.riskLevel === "high");
 const loopSuccessRate = computed(() => {
   if (!loopMetrics.value) return "-";
@@ -1003,6 +1032,7 @@ let summaryTimer: number | null = null;
 let uiActionListener: ((event: Event) => void) | null = null;
 let chatScrollScheduled = false;
 let draftSaveTimer: number | null = null;
+let draftServerSaveTimer: number | null = null;
 
 type DraftSnapshot = {
   yaml?: string;
@@ -1084,7 +1114,7 @@ function resetWorkspaceState() {
   resetStreamState();
 }
 
-function loadWorkspaceForSession(sessionId: string) {
+async function loadWorkspaceForSession(sessionId: string) {
   if (typeof window === "undefined") return;
   if (!sessionId) {
     resetWorkspaceState();
@@ -1094,6 +1124,10 @@ function loadWorkspaceForSession(sessionId: string) {
   const storedDraftId = map[sessionId];
   if (!storedDraftId) {
     resetWorkspaceState();
+    return;
+  }
+  const loadedFromServer = await loadDraftFromServer(storedDraftId);
+  if (loadedFromServer) {
     return;
   }
   const raw = window.localStorage.getItem(draftStorageKey(storedDraftId));
@@ -1144,13 +1178,64 @@ function persistDraftToStorage() {
     };
     try {
       window.localStorage.setItem(draftStorageKey(draftId.value), JSON.stringify(payload));
-      if (chatSessionId.value) {
-        setSessionDraftId(chatSessionId.value, draftId.value);
-      }
     } catch {
       // ignore storage errors
     }
+    persistDraftToServer(draftId.value, yaml.value);
   }, 200);
+}
+
+function persistDraftToServer(id: string, yamlText: string) {
+  if (!id.trim() || !yamlText.trim()) return;
+  if (draftServerSaveTimer) {
+    window.clearTimeout(draftServerSaveTimer);
+  }
+  draftServerSaveTimer = window.setTimeout(async () => {
+    try {
+      await request(`/ai/workflow/drafts/${id}`, {
+        method: "PUT",
+        body: { yaml: yamlText }
+      });
+    } catch {
+      // ignore server save errors
+    }
+  }, 400);
+}
+
+async function loadDraftFromServer(id: string) {
+  if (!id.trim()) return false;
+  try {
+    const data = await request<{ draft: { yaml?: string } }>(`/ai/workflow/drafts/${id}`);
+    const savedYaml = typeof data.draft?.yaml === "string" ? data.draft.yaml : "";
+    if (!savedYaml.trim()) return false;
+    draftId.value = id;
+    autoSync.value = true;
+    yaml.value = savedYaml;
+    visualYaml.value = savedYaml;
+    visualDirty.value = false;
+    yamlDirty.value = false;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function persistDraftSnapshotForSession(sessionId: string, nextDraftId: string, yamlText: string) {
+  if (typeof window === "undefined") return;
+  if (!sessionId || !nextDraftId.trim()) return;
+  const payload: DraftSnapshot = {
+    yaml: yamlText,
+    visual_yaml: yamlText,
+    auto_sync: true,
+    draft_id: nextDraftId
+  };
+  try {
+    window.localStorage.setItem(draftStorageKey(nextDraftId), JSON.stringify(payload));
+    setSessionDraftId(sessionId, nextDraftId);
+    persistDraftToServer(nextDraftId, yamlText);
+  } catch {
+    // ignore storage errors
+  }
 }
 watch(
   yaml,
@@ -1316,6 +1401,11 @@ function resetStreamState() {
   functionCallEntryIds.value = {};
   functionCallStreamEntryIds.value = {};
   loopMetrics.value = null;
+  activeStreamSessionId.value = null;
+  if (streamAbortController.value) {
+    streamAbortController.value.abort();
+    streamAbortController.value = null;
+  }
   refreshActiveStatus();
 }
 
@@ -1505,6 +1595,7 @@ function upsertCardEntry(card: CardPayload) {
       replyId,
       card
     });
+    void appendChatSessionCard(card, replyId);
     return;
   }
   const existingIndex = chatEntries.value.findIndex((entry) => entry.cardId === cardId);
@@ -1516,6 +1607,7 @@ function upsertCardEntry(card: CardPayload) {
       cardId,
       card
     }));
+    void appendChatSessionCard(card, replyId);
     return;
   }
   pushChatEntry({
@@ -1527,6 +1619,7 @@ function upsertCardEntry(card: CardPayload) {
     cardId,
     card
   });
+  void appendChatSessionCard(card, replyId);
 }
 
 function breakThoughtSegment() {
@@ -1561,6 +1654,7 @@ function startAnswerStream(reply: StreamReply) {
     extra: reply.extra || "DONE"
   });
   liveAnswerEntryId.value = id;
+  const sessionId = activeStreamSessionId.value || chatSessionId.value;
   let cursor = 0;
   const text = reply.text;
   const chunkSize = 6;
@@ -1579,7 +1673,7 @@ function startAnswerStream(reply: StreamReply) {
         liveAnswerTimer = null;
       }
       liveAnswerEntryId.value = null;
-      void appendChatSessionMessage("assistant", text);
+      void appendChatSessionMessage("assistant", text, sessionId || undefined);
     }
   }, 24);
 }
@@ -1641,6 +1735,45 @@ function scheduleChatScroll(force = false) {
 
 function setChatEntriesFromSession(session: ChatSession) {
   const messages = Array.isArray(session.messages) ? session.messages : [];
+  const timeline = Array.isArray(session.timeline) ? session.timeline : [];
+  if (timeline.length) {
+    const sorted = [...timeline].sort((a, b) => {
+      const left = Date.parse(a.created_at || "");
+      const right = Date.parse(b.created_at || "");
+      if (Number.isNaN(left) && Number.isNaN(right)) return 0;
+      if (Number.isNaN(left)) return 1;
+      if (Number.isNaN(right)) return -1;
+      return left - right;
+    });
+    chatEntries.value = sorted.map((item, index) => {
+      if (item.type === "card") {
+        const card = item.payload || { card_type: item.card_type };
+        const cardType = typeof card.card_type === "string" ? card.card_type : "";
+        const label = cardType === "plan_step" ? "步骤"
+          : cardType === "subloop" ? "子循环"
+            : cardType === "yaml_patch" ? "片段"
+              : "卡片";
+        return {
+          id: `session-timeline-card-${index}`,
+          label,
+          body: "",
+          type: "card",
+          replyId: item.reply_id || item.card_id || item.id,
+          cardId: item.card_id,
+          card: card as CardPayload
+        };
+      }
+      return {
+        id: `session-timeline-msg-${index}`,
+        label: item.role === "user" ? "用户" : aiDisplayName.value,
+        body: item.content || "",
+        type: item.role === "user" ? "user" : "ai"
+      };
+    });
+    chatAutoScroll.value = true;
+    void nextTick(() => scrollChatToBottom(true));
+    return;
+  }
   if (!messages.length) {
     chatEntries.value = [
       {
@@ -1674,13 +1807,18 @@ async function loadChatSessions() {
 }
 
 async function restoreChatSession(id: string) {
+  if (streamAbortController.value) {
+    streamAbortController.value.abort();
+  }
+  chatEntries.value = [];
   try {
     const data = await request<{ session: ChatSession }>(`/ai/chat/sessions/${id}`);
     chatSessionId.value = data.session.id;
     chatSessionTitle.value = data.session.title || "新会话";
     window.localStorage.setItem(SESSION_STORAGE_KEY, chatSessionId.value);
+    resetWorkspaceState();
     setChatEntriesFromSession(data.session);
-    loadWorkspaceForSession(chatSessionId.value);
+    await loadWorkspaceForSession(chatSessionId.value);
   } catch (err) {
     chatSessionId.value = "";
     chatSessionTitle.value = "";
@@ -1688,6 +1826,10 @@ async function restoreChatSession(id: string) {
 }
 
 async function createChatSession() {
+  if (streamAbortController.value) {
+    streamAbortController.value.abort();
+  }
+  chatEntries.value = [];
   try {
     const data = await request<{ session: ChatSession }>("/ai/chat/sessions", {
       method: "POST",
@@ -1696,8 +1838,10 @@ async function createChatSession() {
     chatSessionId.value = data.session.id;
     chatSessionTitle.value = data.session.title || "新会话";
     window.localStorage.setItem(SESSION_STORAGE_KEY, chatSessionId.value);
+    setSessionDraftId(chatSessionId.value, "");
+    resetWorkspaceState();
     setChatEntriesFromSession(data.session);
-    loadWorkspaceForSession(chatSessionId.value);
+    await loadWorkspaceForSession(chatSessionId.value);
     await loadChatSessions();
     showSessionModal.value = false;
   } catch (err) {
@@ -2789,11 +2933,12 @@ async function ensureChatSession() {
   await createChatSession();
 }
 
-async function appendChatSessionMessage(role: "user" | "assistant", content: string) {
+async function appendChatSessionMessage(role: "user" | "assistant", content: string, sessionId?: string) {
   if (!content.trim()) return;
-  if (!chatSessionId.value) return;
+  const targetSessionId = sessionId || chatSessionId.value;
+  if (!targetSessionId) return;
   try {
-    const data = await request<{ session: ChatSession }>(`/ai/chat/sessions/${chatSessionId.value}/messages`, {
+    const data = await request<{ session: ChatSession }>(`/ai/chat/sessions/${targetSessionId}/messages`, {
       method: "POST",
       body: { content, role, skip_ai: true }
     });
@@ -2807,6 +2952,19 @@ async function appendChatSessionMessage(role: "user" | "assistant", content: str
       type: "error",
       extra: "ERROR"
     });
+  }
+}
+
+async function appendChatSessionCard(card: CardPayload, replyId: string) {
+  const targetSessionId = activeStreamSessionId.value || chatSessionId.value;
+  if (!targetSessionId) return;
+  try {
+    await request(`/ai/chat/sessions/${targetSessionId}/cards`, {
+      method: "POST",
+      body: { reply_id: replyId, card }
+    });
+  } catch {
+    // ignore card persistence errors
   }
 }
 
@@ -3011,14 +3169,16 @@ async function startStreamWithMessage(message: string, options: { clearPrompt?: 
   lastStatusError.value = "";
   lastStreamError.value = "";
   await ensureChatSession();
+  const streamSessionId = chatSessionId.value;
   currentReplyId.value = nextReplyId();
   pushChatEntry({ label: "用户", body: trimmed, type: "user" });
   resetStreamState();
+  activeStreamSessionId.value = streamSessionId;
   showExamples.value = false;
   questionOverrides.value = [];
   chatPending.value = true;
   chatPhase.value = "waiting";
-  void appendChatSessionMessage("user", trimmed);
+  void appendChatSessionMessage("user", trimmed, streamSessionId);
   busy.value = true;
   streamError.value = "";
   progressEvents.value = [];
@@ -3060,11 +3220,31 @@ async function startStream() {
 
 async function streamWorkflow(payload: Record<string, unknown>) {
   const url = `${apiBase()}/ai/workflow/stream`;
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
+  if (streamAbortController.value) {
+    streamAbortController.value.abort();
+  }
+  const controller = new AbortController();
+  streamAbortController.value = controller;
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal
+    });
+  } catch (err) {
+    if (!controller.signal.aborted) {
+      streamError.value = "流式连接失败";
+      pushChatEntry({
+        label: "系统",
+        body: streamError.value,
+        type: "error",
+        extra: "ERROR"
+      });
+    }
+    return;
+  }
   if (!response.ok || !response.body) {
     streamError.value = "流式连接失败";
     pushChatEntry({
@@ -3093,19 +3273,24 @@ async function streamWorkflow(payload: Record<string, unknown>) {
     }
   }
 
+  if (controller === streamAbortController.value) {
+    streamAbortController.value = null;
+  }
   if (!streamResultReceived.value && !streamError.value) {
-    const nextError = "流式连接中断";
-    streamError.value = nextError;
-    chatPending.value = false;
-    if (nextError !== lastStreamError.value) {
-      pushChatEntry({
-        label: "系统",
-        body: nextError,
-        type: "error",
-        extra: "ERROR"
-      });
+    const nextError = controller.signal.aborted ? "" : "流式连接中断";
+    if (nextError) {
+      streamError.value = nextError;
+      chatPending.value = false;
+      if (nextError !== lastStreamError.value) {
+        pushChatEntry({
+          label: "系统",
+          body: nextError,
+          type: "error",
+          extra: "ERROR"
+        });
+      }
+      lastStreamError.value = nextError;
     }
-    lastStreamError.value = nextError;
     chatPhase.value = "idle";
   }
 }
@@ -3124,7 +3309,7 @@ function handleSSEChunk(chunk: string) {
   if (!data) return;
   try {
     const payload = JSON.parse(data);
-    if (eventName === "status") {
+  if (eventName === "status") {
       const evt = payload as ProgressEvent;
       const translatedMessage = translateErrorMessage(evt.message || "");
       const normalizedEvt = translatedMessage ? { ...evt, message: translatedMessage } : evt;
@@ -3141,14 +3326,43 @@ function handleSSEChunk(chunk: string) {
           });
         }
       }
-    } else if (eventName === "message") {
-      const msg = payload as StreamMessage;
-      if (msg.type === "verbose") {
-        handleVerboseMessage(msg);
-      } else {
-        handleFunctionCallMessage(msg);
+  } else if (eventName === "message") {
+    const msg = payload as StreamMessage;
+    if (msg.type === "plan_ready") {
+      if (typeof msg.content === "string" && msg.content.trim()) {
+        try {
+          const planPayload = JSON.parse(msg.content) as Record<string, unknown>;
+          const plan = Array.isArray(planPayload.plan) ? planPayload.plan : [];
+          if (plan.length) {
+            const lines = plan
+              .map((step, index) => {
+                const item = step as Record<string, unknown>;
+                const name = typeof item.step_name === "string" ? item.step_name : `step-${index + 1}`;
+                const desc = typeof item.description === "string" ? item.description : "";
+                const deps = Array.isArray(item.dependencies)
+                  ? item.dependencies.filter((d) => typeof d === "string")
+                  : [];
+                const depText = deps.length ? ` (依赖: ${deps.join(", ")})` : "";
+                return `${index + 1}. ${name}${desc ? ` - ${desc}` : ""}${depText}`;
+              })
+              .join("\n");
+            pushChatEntry({
+              label: "计划",
+              body: lines,
+              type: "ai",
+              extra: "PLAN"
+            });
+          }
+        } catch {
+          // ignore plan parse errors
+        }
       }
-      markResponding();
+    } else if (msg.type === "verbose") {
+      handleVerboseMessage(msg);
+    } else {
+      handleFunctionCallMessage(msg);
+    }
+    markResponding();
     } else if (eventName === "card") {
       upsertCardEntry(payload as CardPayload);
       markResponding();
@@ -3179,12 +3393,14 @@ function handleSSEChunk(chunk: string) {
         if (hasStreamDelta.value) {
           stopAnswerStream();
           appendAnswerDelta(reply.text, reply.type);
-          void appendChatSessionMessage("assistant", reply.text);
+          const sessionId = activeStreamSessionId.value || chatSessionId.value;
+          void appendChatSessionMessage("assistant", reply.text, sessionId || undefined);
         } else {
           startAnswerStream(reply);
         }
       }
       chatPhase.value = "idle";
+      activeStreamSessionId.value = null;
     } else if (eventName === "error") {
       streamResultReceived.value = true;
       const nextError = translateErrorMessage(payload.error || "生成失败");
@@ -3209,6 +3425,7 @@ function handleSSEChunk(chunk: string) {
       activeNodes.value = [];
       refreshActiveStatus();
       chatPhase.value = "idle";
+      activeStreamSessionId.value = null;
     }
   } catch (err) {
     streamError.value = "解析流式数据失败";
@@ -3217,10 +3434,17 @@ function handleSSEChunk(chunk: string) {
 }
 
 function applyResult(payload: Record<string, unknown>): StreamReply | null {
+  const streamSessionId = activeStreamSessionId.value || chatSessionId.value;
+  const isCurrentSession = streamSessionId === chatSessionId.value;
   const nextYaml = typeof payload.yaml === "string" ? payload.yaml : "";
   if (nextYaml) {
     const cleaned = stripTargetsFromYaml(nextYaml);
-    applyAIGeneratedYaml(cleaned);
+    if (isCurrentSession) {
+      applyAIGeneratedYaml(cleaned);
+    }
+    if (typeof payload.draft_id === "string") {
+      persistDraftSnapshotForSession(streamSessionId, payload.draft_id, cleaned);
+    }
   }
   const planSteps = Array.isArray(payload.plan) ? payload.plan : [];
   if (planSteps.length) {
@@ -3305,9 +3529,11 @@ function applyResult(payload: Record<string, unknown>): StreamReply | null {
     history.value = payload.history.filter((item) => typeof item === "string");
   }
   if (typeof payload.draft_id === "string") {
-    draftId.value = payload.draft_id;
-    if (chatSessionId.value) {
-      setSessionDraftId(chatSessionId.value, payload.draft_id);
+    if (streamSessionId) {
+      setSessionDraftId(streamSessionId, payload.draft_id);
+    }
+    if (isCurrentSession) {
+      draftId.value = payload.draft_id;
     }
   }
   humanConfirmed.value = false;
@@ -3849,6 +4075,28 @@ function diffSummary(prev: string, next: string) {
   margin: 0;
   padding: 0;
   list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.timeline-group {
+  list-style: none;
+  padding: 8px 0;
+  border-bottom: 1px dashed rgba(27, 27, 27, 0.12);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.timeline-group:last-child {
+  border-bottom: none;
+}
+
+.timeline-group-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 8px;

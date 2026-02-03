@@ -43,6 +43,11 @@ type aiChatRequest struct {
 	SkipAI  bool   `json:"skip_ai,omitempty"`
 }
 
+type aiChatCardRequest struct {
+	ReplyID string         `json:"reply_id,omitempty"`
+	Card    map[string]any `json:"card"`
+}
+
 type aiChatResponse struct {
 	Reply   *ai.Message     `json:"reply,omitempty"`
 	Session aistore.Session `json:"session"`
@@ -100,6 +105,19 @@ type aiSummaryResponse struct {
 	RiskNotes   []string `json:"risk_notes,omitempty"`
 	Issues      []string `json:"issues,omitempty"`
 	NeedsReview bool     `json:"needs_review"`
+}
+
+type aiDraftUpsertRequest struct {
+	Title     string   `json:"title,omitempty"`
+	Prompt    string   `json:"prompt,omitempty"`
+	YAML      string   `json:"yaml"`
+	Summary   string   `json:"summary,omitempty"`
+	Issues    []string `json:"issues,omitempty"`
+	RiskLevel string   `json:"risk_level,omitempty"`
+}
+
+type aiDraftResponse struct {
+	Draft aiworkflowstore.Draft `json:"draft"`
 }
 
 type aiStreamRequest struct {
@@ -195,6 +213,11 @@ func (s *Server) handleAIChatSession(w http.ResponseWriter, r *http.Request) {
 		s.handleAIChatMessages(w, r, id)
 		return
 	}
+	if strings.HasSuffix(path, "/cards") {
+		id := strings.TrimSuffix(path, "/cards")
+		s.handleAIChatCards(w, r, id)
+		return
+	}
 
 	id := strings.Trim(path, "/")
 	if id == "" {
@@ -210,6 +233,54 @@ func (s *Server) handleAIChatSession(w http.ResponseWriter, r *http.Request) {
 	session, _, err := s.aiStore.Get(id)
 	if err != nil {
 		writeError(w, r, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, aiSessionResponse{Session: session})
+}
+
+func (s *Server) handleAIChatCards(w http.ResponseWriter, r *http.Request, id string) {
+	if r.Method != http.MethodPost {
+		writeError(w, r, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	id = strings.Trim(id, "/")
+	if id == "" {
+		writeError(w, r, http.StatusNotFound, "session id is required")
+		return
+	}
+	body, err := readBody(r)
+	if err != nil {
+		writeError(w, r, http.StatusBadRequest, err.Error())
+		return
+	}
+	var req aiChatCardRequest
+	if err := json.Unmarshal(body, &req); err != nil {
+		writeError(w, r, http.StatusBadRequest, "invalid json payload")
+		return
+	}
+	if req.Card == nil {
+		writeError(w, r, http.StatusBadRequest, "card is required")
+		return
+	}
+	cardID := ""
+	if value, ok := req.Card["card_id"].(string); ok {
+		cardID = strings.TrimSpace(value)
+	}
+	cardType := ""
+	if value, ok := req.Card["card_type"].(string); ok {
+		cardType = strings.TrimSpace(value)
+	}
+	entry := aistore.CardEntry{
+		ID:        fmt.Sprintf("card-%d", time.Now().UnixNano()),
+		CardID:    cardID,
+		ReplyID:   strings.TrimSpace(req.ReplyID),
+		CardType:  cardType,
+		Payload:   req.Card,
+		CreatedAt: time.Now().UTC(),
+	}
+	session, err := s.aiStore.UpsertCard(id, entry)
+	if err != nil {
+		writeError(w, r, http.StatusInternalServerError, err.Error())
 		return
 	}
 	writeJSON(w, http.StatusOK, aiSessionResponse{Session: session})
@@ -977,6 +1048,56 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 	}
 }
 
+func (s *Server) handleAIWorkflowDraft(w http.ResponseWriter, r *http.Request) {
+	if s.aiWorkflowStore == nil {
+		writeError(w, r, http.StatusServiceUnavailable, "draft store not configured")
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/ai/workflow/drafts/")
+	id = strings.Trim(id, "/")
+	if strings.TrimSpace(id) == "" {
+		writeError(w, r, http.StatusBadRequest, "draft id is required")
+		return
+	}
+
+	switch r.Method {
+	case http.MethodGet:
+		draft, _, err := s.aiWorkflowStore.Get(id)
+		if err != nil {
+			writeError(w, r, http.StatusNotFound, "draft not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, aiDraftResponse{Draft: draft})
+	case http.MethodPut:
+		var req aiDraftUpsertRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			writeError(w, r, http.StatusBadRequest, "invalid request")
+			return
+		}
+		if strings.TrimSpace(req.YAML) == "" {
+			writeError(w, r, http.StatusBadRequest, "yaml is required")
+			return
+		}
+		input := aiworkflowstore.Draft{
+			ID:        id,
+			Title:     req.Title,
+			Prompt:    req.Prompt,
+			YAML:      req.YAML,
+			Summary:   req.Summary,
+			Issues:    req.Issues,
+			RiskLevel: req.RiskLevel,
+		}
+		saved, err := s.aiWorkflowStore.Save(input)
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, "draft save failed")
+			return
+		}
+		writeJSON(w, http.StatusOK, aiDraftResponse{Draft: saved})
+	default:
+		writeError(w, r, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
 func countStepsInYAML(yamlText string) int {
 	lines := strings.Split(yamlText, "\n")
 	count := 0
@@ -1022,6 +1143,32 @@ func buildStreamMessageFromEvent(evt aiworkflow.Event, replyID string, index int
 	if evt.EventType != "" {
 		switch evt.EventType {
 		case "coder_done", "final_validation", "finalize_success", "finalize_failed":
+			return streamMessage{}, false
+		case "plan_ready":
+			if evt.Data != nil {
+				if plan, ok := evt.Data["plan"]; ok {
+					data, err := json.Marshal(map[string]any{"plan": plan})
+					if err == nil {
+						return streamMessage{
+							MessageID: fmt.Sprintf("%s-%s-%d", evt.CallID, evt.Status, index),
+							ReplyID:   replyID,
+							Role:      "assistant",
+							Type:      "plan_ready",
+							Content:   string(data),
+							IsFinish:  true,
+							Index:     index,
+							ExtraInfo: streamMessageExt{
+								CallID:       evt.CallID,
+								AgentID:      evt.AgentID,
+								AgentName:    evt.AgentName,
+								AgentRole:    evt.AgentRole,
+								EventType:    evt.EventType,
+								ParentStepID: evt.ParentStepID,
+							},
+						}, true
+					}
+				}
+			}
 			return streamMessage{}, false
 		}
 	}

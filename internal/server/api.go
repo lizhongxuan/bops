@@ -89,6 +89,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("/api/ai/workflow/execute", s.handleAIWorkflowExecute)
 	s.mux.HandleFunc("/api/ai/workflow/summary", s.handleAIWorkflowSummary)
 	s.mux.HandleFunc("/api/ai/workflow/stream", s.handleAIWorkflowStream)
+	s.mux.HandleFunc("/api/ai/workflow/drafts/", s.handleAIWorkflowDraft)
 	s.mux.HandleFunc("/api/settings/ai", s.handleAISettings)
 	s.mux.HandleFunc("/api/skills", s.handleSkills)
 	s.mux.HandleFunc("/api/skills/reload", s.handleSkillsReload)

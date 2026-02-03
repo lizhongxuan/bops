@@ -66,6 +66,9 @@ func (p *Pipeline) RunMultiCreate(ctx context.Context, prompt string, context ma
 	}
 	state.Plan = plan
 	draftStore.UpdatePlan(draftID, plan)
+	emitCustomEvent(state, "plan_ready", "done", "plan ready", map[string]any{
+		"plan": plan,
+	})
 
 	for i := range state.Plan {
 		step := &state.Plan[i]

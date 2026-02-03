@@ -17,11 +17,34 @@ import (
 )
 
 type Session struct {
-	ID        string       `json:"id" yaml:"id"`
-	Title     string       `json:"title" yaml:"title"`
-	CreatedAt time.Time    `json:"created_at" yaml:"created_at"`
-	UpdatedAt time.Time    `json:"updated_at" yaml:"updated_at"`
-	Messages  []ai.Message `json:"messages" yaml:"messages"`
+	ID        string          `json:"id" yaml:"id"`
+	Title     string          `json:"title" yaml:"title"`
+	CreatedAt time.Time       `json:"created_at" yaml:"created_at"`
+	UpdatedAt time.Time       `json:"updated_at" yaml:"updated_at"`
+	Messages  []ai.Message    `json:"messages" yaml:"messages"`
+	Cards     []CardEntry     `json:"cards,omitempty" yaml:"cards,omitempty"`
+	Timeline  []TimelineEntry `json:"timeline,omitempty" yaml:"timeline,omitempty"`
+}
+
+type CardEntry struct {
+	ID        string         `json:"id" yaml:"id"`
+	CardID    string         `json:"card_id,omitempty" yaml:"card_id,omitempty"`
+	ReplyID   string         `json:"reply_id,omitempty" yaml:"reply_id,omitempty"`
+	CardType  string         `json:"card_type,omitempty" yaml:"card_type,omitempty"`
+	Payload   map[string]any `json:"payload" yaml:"payload"`
+	CreatedAt time.Time      `json:"created_at" yaml:"created_at"`
+}
+
+type TimelineEntry struct {
+	ID        string         `json:"id" yaml:"id"`
+	Type      string         `json:"type" yaml:"type"` // message | card
+	Role      string         `json:"role,omitempty" yaml:"role,omitempty"`
+	Content   string         `json:"content,omitempty" yaml:"content,omitempty"`
+	CardID    string         `json:"card_id,omitempty" yaml:"card_id,omitempty"`
+	ReplyID   string         `json:"reply_id,omitempty" yaml:"reply_id,omitempty"`
+	CardType  string         `json:"card_type,omitempty" yaml:"card_type,omitempty"`
+	Payload   map[string]any `json:"payload,omitempty" yaml:"payload,omitempty"`
+	CreatedAt time.Time      `json:"created_at" yaml:"created_at"`
 }
 
 type Summary struct {
@@ -188,10 +211,71 @@ func (s *Store) AppendMessage(id string, msg ai.Message) (Session, error) {
 		return Session{}, err
 	}
 	session.Messages = append(session.Messages, msg)
+	session.Timeline = append(session.Timeline, TimelineEntry{
+		ID:        fmt.Sprintf("msg-%d", time.Now().UnixNano()),
+		Type:      "message",
+		Role:      msg.Role,
+		Content:   msg.Content,
+		CreatedAt: time.Now().UTC(),
+	})
 	if err := s.Save(session); err != nil {
 		return Session{}, err
 	}
 	logging.L().Debug("ai session message appended", zap.String("id", id), zap.Int("messages", len(session.Messages)))
+	return session, nil
+}
+
+func (s *Store) UpsertCard(id string, card CardEntry) (Session, error) {
+	logging.L().Debug("ai session upsert card", zap.String("id", id), zap.String("card_id", card.CardID))
+	session, _, err := s.Get(id)
+	if err != nil {
+		return Session{}, err
+	}
+	if session.Cards == nil {
+		session.Cards = []CardEntry{}
+	}
+	updated := false
+	if card.CardID != "" {
+		for i, existing := range session.Cards {
+			if existing.CardID == card.CardID {
+				session.Cards[i] = card
+				updated = true
+				break
+			}
+		}
+	}
+	if !updated {
+		session.Cards = append(session.Cards, card)
+	}
+	if session.Timeline == nil {
+		session.Timeline = []TimelineEntry{}
+	}
+	timelineUpdated := false
+	if card.CardID != "" {
+		for i, existing := range session.Timeline {
+			if existing.Type == "card" && existing.CardID == card.CardID {
+				session.Timeline[i].Payload = card.Payload
+				session.Timeline[i].CardType = card.CardType
+				session.Timeline[i].ReplyID = card.ReplyID
+				timelineUpdated = true
+				break
+			}
+		}
+	}
+	if !timelineUpdated {
+		session.Timeline = append(session.Timeline, TimelineEntry{
+			ID:        fmt.Sprintf("card-%d", time.Now().UnixNano()),
+			Type:      "card",
+			CardID:    card.CardID,
+			ReplyID:   card.ReplyID,
+			CardType:  card.CardType,
+			Payload:   card.Payload,
+			CreatedAt: time.Now().UTC(),
+		})
+	}
+	if err := s.Save(session); err != nil {
+		return Session{}, err
+	}
 	return session, nil
 }
 
