@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"bops/internal/ai"
@@ -56,6 +57,7 @@ type Summary struct {
 
 type Store struct {
 	Dir string
+	mu  sync.Mutex
 }
 
 func New(dir string) *Store {
@@ -64,6 +66,8 @@ func New(dir string) *Store {
 
 func (s *Store) List() ([]Summary, error) {
 	logging.L().Debug("ai session list", zap.String("dir", s.Dir))
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if err := s.ensureDir(); err != nil {
 		return nil, err
 	}
@@ -118,6 +122,12 @@ func (s *Store) List() ([]Summary, error) {
 
 func (s *Store) Get(id string) (Session, []byte, error) {
 	logging.L().Debug("ai session get", zap.String("id", id))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.getUnlocked(id)
+}
+
+func (s *Store) getUnlocked(id string) (Session, []byte, error) {
 	path, err := s.path(id)
 	if err != nil {
 		return Session{}, nil, err
@@ -130,6 +140,10 @@ func (s *Store) Get(id string) (Session, []byte, error) {
 
 	var session Session
 	if err := yaml.Unmarshal(data, &session); err != nil {
+		recovered, recErr := s.recoverCorruptedSession(path, id, data, err)
+		if recErr == nil {
+			return recovered, nil, nil
+		}
 		return Session{}, nil, err
 	}
 	if session.ID == "" {
@@ -172,6 +186,12 @@ func (s *Store) Create(title string) (Session, error) {
 
 func (s *Store) Save(session Session) error {
 	logging.L().Debug("ai session save", zap.String("id", session.ID), zap.Int("messages", len(session.Messages)))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.saveUnlocked(session)
+}
+
+func (s *Store) saveUnlocked(session Session) error {
 	if err := s.ensureDir(); err != nil {
 		return err
 	}
@@ -197,7 +217,11 @@ func (s *Store) Save(session Session) error {
 		return err
 	}
 
-	if err := os.WriteFile(path, raw, 0o644); err != nil {
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, raw, 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
 		return err
 	}
 	logging.L().Debug("ai session saved", zap.String("id", session.ID))
@@ -206,7 +230,9 @@ func (s *Store) Save(session Session) error {
 
 func (s *Store) AppendMessage(id string, msg ai.Message) (Session, error) {
 	logging.L().Debug("ai session append message", zap.String("id", id), zap.String("role", msg.Role))
-	session, _, err := s.Get(id)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session, _, err := s.getUnlocked(id)
 	if err != nil {
 		return Session{}, err
 	}
@@ -218,7 +244,7 @@ func (s *Store) AppendMessage(id string, msg ai.Message) (Session, error) {
 		Content:   msg.Content,
 		CreatedAt: time.Now().UTC(),
 	})
-	if err := s.Save(session); err != nil {
+	if err := s.saveUnlocked(session); err != nil {
 		return Session{}, err
 	}
 	logging.L().Debug("ai session message appended", zap.String("id", id), zap.Int("messages", len(session.Messages)))
@@ -227,7 +253,9 @@ func (s *Store) AppendMessage(id string, msg ai.Message) (Session, error) {
 
 func (s *Store) UpsertCard(id string, card CardEntry) (Session, error) {
 	logging.L().Debug("ai session upsert card", zap.String("id", id), zap.String("card_id", card.CardID))
-	session, _, err := s.Get(id)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	session, _, err := s.getUnlocked(id)
 	if err != nil {
 		return Session{}, err
 	}
@@ -273,7 +301,34 @@ func (s *Store) UpsertCard(id string, card CardEntry) (Session, error) {
 			CreatedAt: time.Now().UTC(),
 		})
 	}
-	if err := s.Save(session); err != nil {
+	if err := s.saveUnlocked(session); err != nil {
+		return Session{}, err
+	}
+	return session, nil
+}
+
+func (s *Store) recoverCorruptedSession(path string, id string, data []byte, cause error) (Session, error) {
+	logging.L().Error("ai session yaml corrupted, recovering",
+		zap.String("id", id),
+		zap.String("path", path),
+		zap.Error(cause),
+	)
+	timestamp := time.Now().UTC().Format("20060102-150405")
+	brokenPath := fmt.Sprintf("%s.broken-%s", path, timestamp)
+	if err := os.WriteFile(brokenPath, data, 0o644); err == nil {
+		_ = os.Remove(path)
+	}
+	now := time.Now().UTC()
+	session := Session{
+		ID:        id,
+		Title:     "损坏会话(已恢复)",
+		CreatedAt: now,
+		UpdatedAt: now,
+		Messages:  []ai.Message{},
+		Cards:     []CardEntry{},
+		Timeline:  []TimelineEntry{},
+	}
+	if err := s.saveUnlocked(session); err != nil {
 		return Session{}, err
 	}
 	return session, nil

@@ -1033,6 +1033,7 @@ let uiActionListener: ((event: Event) => void) | null = null;
 let chatScrollScheduled = false;
 let draftSaveTimer: number | null = null;
 let draftServerSaveTimer: number | null = null;
+const planShownInStream = ref(false);
 
 type DraftSnapshot = {
   yaml?: string;
@@ -1402,6 +1403,7 @@ function resetStreamState() {
   functionCallStreamEntryIds.value = {};
   loopMetrics.value = null;
   activeStreamSessionId.value = null;
+  planShownInStream.value = false;
   if (streamAbortController.value) {
     streamAbortController.value.abort();
     streamAbortController.value = null;
@@ -1567,7 +1569,7 @@ function markResponding() {
 }
 
 function upsertCardEntry(card: CardPayload) {
-  const cardId = typeof (card as Record<string, unknown>).card_id === "string"
+  const rawCardId = typeof (card as Record<string, unknown>).card_id === "string"
     ? String((card as Record<string, unknown>).card_id)
     : "";
   const baseReplyId = typeof (card as Record<string, unknown>).reply_id === "string"
@@ -1582,6 +1584,15 @@ function upsertCardEntry(card: CardPayload) {
   const cardType = typeof (card as Record<string, unknown>).card_type === "string"
     ? String((card as Record<string, unknown>).card_type)
     : "";
+  const stepId = typeof (card as Record<string, unknown>).step_id === "string"
+    ? String((card as Record<string, unknown>).step_id)
+    : "";
+  const stepName = typeof (card as Record<string, unknown>).step_name === "string"
+    ? String((card as Record<string, unknown>).step_name)
+    : "";
+  const cardId = cardType === "plan_step"
+    ? rawCardId || (stepId ? `plan-step-${stepId}` : stepName ? `plan-step-${stepName}` : "")
+    : rawCardId;
   const eventType = typeof (card as Record<string, unknown>).event_type === "string"
     ? String((card as Record<string, unknown>).event_type)
     : "";
@@ -1627,7 +1638,16 @@ function upsertCardEntry(card: CardPayload) {
     }
     return;
   }
-  const existingIndex = chatEntries.value.findIndex((entry) => entry.cardId === cardId);
+  const existingIndex = chatEntries.value.findIndex((entry) => {
+    if (entry.cardId === cardId) return true;
+    if (cardType !== "plan_step") return false;
+    const payload = entry.card as Record<string, unknown> | undefined;
+    const entryStepId = typeof payload?.step_id === "string" ? String(payload.step_id) : "";
+    const entryStepName = typeof payload?.step_name === "string" ? String(payload.step_name) : "";
+    if (stepId && entryStepId && stepId === entryStepId) return true;
+    if (!stepId && stepName && entryStepName && stepName === entryStepName) return true;
+    return false;
+  });
   if (existingIndex >= 0) {
     const id = chatEntries.value[existingIndex].id;
     updateChatEntry(id, (entry) => ({
@@ -3362,6 +3382,9 @@ function handleSSEChunk(chunk: string) {
   } else if (eventName === "message") {
     const msg = payload as StreamMessage;
     if (msg.type === "plan_ready") {
+      if (planShownInStream.value) {
+        return;
+      }
       if (typeof msg.content === "string" && msg.content.trim()) {
         try {
           const planPayload = JSON.parse(msg.content) as Record<string, unknown>;
@@ -3385,6 +3408,7 @@ function handleSSEChunk(chunk: string) {
               type: "ai",
               extra: "PLAN"
             });
+            planShownInStream.value = true;
           }
         } catch {
           // ignore plan parse errors
@@ -3480,7 +3504,7 @@ function applyResult(payload: Record<string, unknown>): StreamReply | null {
     }
   }
   const planSteps = Array.isArray(payload.plan) ? payload.plan : [];
-  if (planSteps.length) {
+  if (planSteps.length && !planShownInStream.value) {
     const lines = planSteps
       .map((step, index) => {
         const item = step as Record<string, unknown>;
@@ -3497,6 +3521,7 @@ function applyResult(payload: Record<string, unknown>): StreamReply | null {
       type: "ai",
       extra: "PLAN"
     });
+    planShownInStream.value = true;
   }
   const summaries = Array.isArray(payload.subagent_summaries) ? payload.subagent_summaries : [];
   if (summaries.length) {
