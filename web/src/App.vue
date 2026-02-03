@@ -75,11 +75,11 @@ const displayWorkflowName = computed(() =>
     <div class="main">
       <header v-if="showTopbar" class="topbar">
         <div class="topbar-workflow">
-          <span class="topbar-label">当前工作流</span>
+          <span class="topbar-label">当前工作流:</span>
           <span class="topbar-name">{{ displayWorkflowName }}</span>
         </div>
         <div class="topbar-actions">
-          <RouterLink class="btn ghost" to="/workflows">切换工作区</RouterLink>
+          <RouterLink class="btn ghost" to="/workflows">切换工作流</RouterLink>
           <RouterLink v-if="hasWorkflow" class="btn ghost" :to="`/workflows/${activeWorkflowName}`">
             工作流编排
           </RouterLink>
@@ -242,6 +242,8 @@ const displayWorkflowName = computed(() =>
 .topbar-name {
   color: var(--ink);
   font-weight: 600;
+  font-size: 24px;
+  line-height: 1.2;
 }
 
 .topbar-actions {
