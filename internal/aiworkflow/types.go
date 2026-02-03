@@ -85,6 +85,7 @@ type RunOptions struct {
 	BaseYAML             string
 	AgentSpec            AgentSpec
 	SessionKey           string
+	DraftID              string
 	ToolExecutor         ToolExecutor
 	ToolNames            []string
 	LoopMaxIters         int

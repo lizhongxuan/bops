@@ -91,6 +91,12 @@
               <span class="label">Agent</span>
               <span class="value">{{ cardDetailAgent }}</span>
             </div>
+            <div v-if="cardDetailIssues.length" class="card-detail-section">
+              <div class="section-title">问题</div>
+              <ul class="issue-list">
+                <li v-for="(issue, index) in cardDetailIssues" :key="index">{{ issue }}</li>
+              </ul>
+            </div>
             <div v-if="cardDetailYaml" class="card-detail-section">
               <div class="section-title">片段详情</div>
               <pre class="yaml-preview">{{ cardDetailYaml }}</pre>
@@ -982,6 +988,13 @@ const cardDetailYaml = computed(() => {
   const card = selectedCardDetail.value;
   if (!card) return "";
   return typeof card.yaml_fragment === "string" ? card.yaml_fragment : "";
+});
+const cardDetailIssues = computed(() => {
+  const card = selectedCardDetail.value;
+  if (!card || !Array.isArray(card.issues)) return [];
+  return card.issues
+    .map((item) => (item == null ? "" : String(item)))
+    .filter((item) => item.trim());
 });
 
 let chatIndex = 0;
@@ -3018,7 +3031,7 @@ async function startStreamWithMessage(message: string, options: { clearPrompt?: 
     agentName = agents[0];
     agents = agents.slice(1);
   }
-  const agentMode = agents.length ? "multi" : "loop";
+  const agentMode = "multi_create";
   const payload = {
     mode: "generate",
     agent_mode: agentMode,
@@ -3813,6 +3826,13 @@ function diffSummary(prev: string, next: string) {
 .card-detail-section .section-title {
   font-size: 12px;
   color: var(--muted);
+}
+
+.issue-list {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  color: var(--ink);
 }
 
 .yaml-preview {

@@ -15,6 +15,7 @@ type Pipeline struct {
 	fixRunner      compose.Runnable[*State, *State]
 	sessionLane    *SessionLane
 	globalLane     *GlobalLane
+	draftStore     *DraftStore
 }
 
 func New(cfg Config) (*Pipeline, error) {
@@ -28,6 +29,7 @@ func New(cfg Config) (*Pipeline, error) {
 		cfg:         cfg,
 		sessionLane: NewSessionLane(),
 		globalLane:  NewGlobalLane(defaultGlobalLaneConcurrency),
+		draftStore:  NewDraftStore(),
 	}
 	gen, err := p.buildGenerateGraph()
 	if err != nil {

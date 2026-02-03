@@ -688,6 +688,7 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 		EventSink:     sink,
 		StreamSink:    streamSink,
 		BaseYAML:      baseYAML,
+		DraftID:       strings.TrimSpace(req.DraftID),
 	}
 	if sessionKey := strings.TrimSpace(req.SessionKey); sessionKey != "" {
 		opts.SessionKey = sessionKey
@@ -745,6 +746,8 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 			state, runErr = s.aiWorkflow.RunFix(ctx, req.YAML, req.Issues, opts)
 		} else if agentMode == "loop" {
 			state, runErr = s.aiWorkflow.RunAgentLoop(ctx, strings.TrimSpace(req.Prompt), req.Context, opts)
+		} else if agentMode == "multi_create" {
+			state, runErr = s.aiWorkflow.RunMultiCreate(ctx, strings.TrimSpace(req.Prompt), req.Context, opts)
 		} else if agentMode == "multi" {
 			specs := buildAgentSpecs(req.AgentName, req.Agents)
 			state, runErr = s.aiWorkflow.RunMultiAgent(ctx, strings.TrimSpace(req.Prompt), req.Context, specs, opts)
@@ -1016,6 +1019,12 @@ func buildStreamMessageFromEvent(evt aiworkflow.Event, replyID string, index int
 	if strings.TrimSpace(evt.Node) == "" {
 		return streamMessage{}, false
 	}
+	if evt.EventType != "" {
+		switch evt.EventType {
+		case "coder_done", "final_validation", "finalize_success", "finalize_failed":
+			return streamMessage{}, false
+		}
+	}
 	callID := strings.TrimSpace(evt.CallID)
 	if callID == "" {
 		callID = evt.Node
@@ -1104,6 +1113,41 @@ func buildCardFromEvent(evt aiworkflow.Event, replyID string) (map[string]any, b
 			"event_type":     eventType,
 			"step_status":    evt.Status,
 			"change_summary": summarizeStepChange(evt.Message, ""),
+			"agent_name":     evt.AgentName,
+			"agent_role":     evt.AgentRole,
+			"parent_step_id": stepID,
+		}, true
+	case "step_patch_created", "review_start", "review_update", "review_done", "validation_start", "validation_done":
+		cardID := ""
+		if stepID != "" {
+			cardID = fmt.Sprintf("plan-step-%s", stepID)
+		} else {
+			cardID = fmt.Sprintf("plan-step-%d", time.Now().UnixNano())
+		}
+		var issues []any
+		if evt.Data != nil {
+			if value, ok := evt.Data["issues"].([]string); ok {
+				for _, item := range value {
+					issues = append(issues, item)
+				}
+			} else if value, ok := evt.Data["issues"].([]any); ok {
+				issues = value
+			}
+		}
+		stepStatus := evt.Status
+		if eventType == "step_patch_created" {
+			stepStatus = "updated"
+		}
+		return map[string]any{
+			"card_id":        cardID,
+			"reply_id":       replyID,
+			"card_type":      cardTypePlanStep,
+			"step_id":        stepID,
+			"step_name":      stepName,
+			"event_type":     eventType,
+			"step_status":    stepStatus,
+			"change_summary": summarizeStepChange(evt.Message, ""),
+			"issues":         issues,
 			"agent_name":     evt.AgentName,
 			"agent_role":     evt.AgentRole,
 			"parent_step_id": stepID,

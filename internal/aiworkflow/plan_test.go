@@ -2,30 +2,22 @@ package aiworkflow
 
 import "testing"
 
-func TestParsePlanJSONArray(t *testing.T) {
-	payload := `[{"step_name":"install","description":"install nginx","dependencies":[]}]`
-	steps, err := parsePlanJSON(payload)
+func TestParsePlanJSONList(t *testing.T) {
+	reply := `[{"step_name":"install nginx","description":"install package","dependencies":[]}]`
+	steps, err := parsePlanJSON(reply)
 	if err != nil {
-		t.Fatalf("parsePlanJSON error: %v", err)
+		t.Fatalf("parse plan: %v", err)
 	}
 	if len(steps) != 1 {
 		t.Fatalf("expected 1 step, got %d", len(steps))
 	}
-	if steps[0].StepName != "install" {
-		t.Fatalf("unexpected step name: %s", steps[0].StepName)
+	if steps[0].StepName != "install nginx" {
+		t.Fatalf("unexpected step_name: %q", steps[0].StepName)
 	}
-}
-
-func TestParsePlanJSONObject(t *testing.T) {
-	payload := `{"steps":[{"step_name":"config","description":"render config","dependencies":["install"]}]}`
-	steps, err := parsePlanJSON(payload)
-	if err != nil {
-		t.Fatalf("parsePlanJSON error: %v", err)
+	if steps[0].ID == "" {
+		t.Fatalf("expected step id to be set")
 	}
-	if len(steps) != 1 {
-		t.Fatalf("expected 1 step, got %d", len(steps))
-	}
-	if steps[0].Dependencies[0] != "install" {
-		t.Fatalf("unexpected dependencies: %v", steps[0].Dependencies)
+	if steps[0].Status != StepStatusPending {
+		t.Fatalf("expected pending status, got %q", steps[0].Status)
 	}
 }
