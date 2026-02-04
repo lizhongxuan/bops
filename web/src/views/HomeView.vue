@@ -122,6 +122,13 @@
             <button class="btn btn-sm" type="button" :disabled="executeBusy || !yaml.trim()" @click="runExecution">
               沙箱验证
             </button>
+            <label class="pause-toggle">
+              <input type="checkbox" v-model="pauseAfterStep" :disabled="busy" />
+              <span>每步暂停</span>
+            </label>
+            <button class="btn btn-sm" type="button" :disabled="busy || !pausedCheckpointId" @click="resumePausedWorkflow">
+              继续
+            </button>
           </div>
           <div v-if="!aiConfigured" class="ai-config-warning">
             未配置AI,无法使用,请
@@ -662,6 +669,8 @@ type ProgressEvent = {
   node: string;
   status: string;
   message?: string;
+  event_type?: string;
+  data?: Record<string, unknown>;
 };
 
 type ChatEntry = {
@@ -858,6 +867,9 @@ const streamStatus = ref("");
 const streamStatusType = ref("");
 const lastStatusError = ref("");
 const lastStreamError = ref("");
+const pausedCheckpointId = ref("");
+const pauseAfterStep = ref(false);
+const lastSubmittedPrompt = ref("");
 type ChatPhase = "idle" | "sending" | "waiting" | "responding";
 const chatPhase = ref<ChatPhase>("idle");
 const summary = ref<SummaryState>({
@@ -1597,14 +1609,7 @@ function upsertCardEntry(card: CardPayload) {
     ? String((card as Record<string, unknown>).event_type)
     : "";
   const isPlanProgress = cardType === "plan_step" && (eventType === "plan_step_start" || eventType === "plan_step_done");
-  if (isPlanProgress && eventType === "plan_step_done") {
-    const existingIndex = chatEntries.value.findIndex((entry) => entry.cardId === cardId);
-    if (existingIndex >= 0) {
-      chatEntries.value.splice(existingIndex, 1);
-    }
-    return;
-  }
-  if (cardType === "plan_step" && eventType === "review_done") {
+  if (cardType === "plan_step" && (eventType === "review_done" || eventType === "step_patch_created")) {
     const yamlText = typeof (card as Record<string, unknown>).yaml === "string"
       ? String((card as Record<string, unknown>).yaml)
       : "";
@@ -3221,6 +3226,8 @@ async function startStreamWithMessage(message: string, options: { clearPrompt?: 
   streamStatusType.value = "busy";
   lastStatusError.value = "";
   lastStreamError.value = "";
+  pausedCheckpointId.value = "";
+  lastSubmittedPrompt.value = trimmed;
   await ensureChatSession();
   const streamSessionId = chatSessionId.value;
   currentReplyId.value = nextReplyId();
@@ -3255,6 +3262,7 @@ async function startStreamWithMessage(message: string, options: { clearPrompt?: 
     env: selectedValidationEnv.value || undefined,
     execute: executeEnabled.value,
     max_retries: maxRetries.value,
+    pause_after_step: pauseAfterStep.value,
     draft_id: draftId.value || undefined,
     yaml: baseYaml || undefined
   };
@@ -3269,6 +3277,62 @@ async function startStreamWithMessage(message: string, options: { clearPrompt?: 
 
 async function startStream() {
   await startStreamWithMessage(prompt.value, { clearPrompt: true });
+}
+
+async function resumePausedWorkflow() {
+  const checkpointId = pausedCheckpointId.value;
+  if (!checkpointId || busy.value) return;
+  const basePrompt = lastSubmittedPrompt.value || prompt.value.trim();
+  if (!basePrompt) {
+    pushChatEntry({
+      label: "系统",
+      body: "无法恢复：缺少原始需求内容。",
+      type: "error",
+      extra: "ERROR"
+    });
+    return;
+  }
+  chatPhase.value = "sending";
+  streamStatus.value = "正在恢复执行...";
+  streamStatusType.value = "busy";
+  lastStatusError.value = "";
+  lastStreamError.value = "";
+  busy.value = true;
+  chatPending.value = true;
+  streamError.value = "";
+  progressEvents.value = [];
+  executeResult.value = null;
+  const currentYaml = stripTargetsFromYaml(getVisualYaml()).trim();
+  const baseYaml = steps.value.length ? currentYaml : "";
+  let agentName = defaultAgent.value;
+  let agents = defaultAgents.value.filter((name) => name && name !== agentName);
+  if (!agentName && agents.length) {
+    agentName = agents[0];
+    agents = agents.slice(1);
+  }
+  const payload = {
+    mode: "generate",
+    agent_mode: "multi_create",
+    agent_name: agentName || undefined,
+    agents: agents.length ? agents : undefined,
+    prompt: basePrompt,
+    context: buildContext(),
+    env: selectedValidationEnv.value || undefined,
+    execute: executeEnabled.value,
+    max_retries: maxRetries.value,
+    pause_after_step: pauseAfterStep.value,
+    resume_checkpoint_id: checkpointId,
+    draft_id: draftId.value || undefined,
+    yaml: baseYaml || undefined
+  };
+  pausedCheckpointId.value = "";
+  try {
+    await streamWorkflow(payload);
+  } finally {
+    busy.value = false;
+    chatPending.value = false;
+    chatPhase.value = "idle";
+  }
 }
 
 async function streamWorkflow(payload: Record<string, unknown>) {
@@ -3368,6 +3432,21 @@ function handleSSEChunk(chunk: string) {
       const normalizedEvt = translatedMessage ? { ...evt, message: translatedMessage } : evt;
       updateProgressEvents(normalizedEvt);
       updateActiveNodes(normalizedEvt);
+      if ((normalizedEvt.event_type === "checkpoint" || normalizedEvt.node === "checkpoint") && normalizedEvt.status === "paused") {
+        const dataObj = normalizedEvt.data || {};
+        const checkpointId = typeof dataObj.checkpoint_id === "string" ? dataObj.checkpoint_id : "";
+        if (checkpointId) {
+          pausedCheckpointId.value = checkpointId;
+          pushChatEntry({
+            label: "系统",
+            body: "任务已暂停，点击“继续”可恢复执行。",
+            type: "ai",
+            extra: "PAUSED"
+          });
+          chatPhase.value = "idle";
+          chatPending.value = false;
+        }
+      }
       if (normalizedEvt.status === "error" && translatedMessage) {
         lastStatusError.value = translatedMessage;
         if (translatedMessage !== lastStreamError.value) {
@@ -3458,6 +3537,9 @@ function handleSSEChunk(chunk: string) {
       }
       chatPhase.value = "idle";
       activeStreamSessionId.value = null;
+      if (!pausedCheckpointId.value) {
+        pauseAfterStep.value = false;
+      }
     } else if (eventName === "error") {
       streamResultReceived.value = true;
       const nextError = translateErrorMessage(payload.error || "生成失败");
@@ -4431,6 +4513,19 @@ function diffSummary(prev: string, next: string) {
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+
+.pause-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.pause-toggle input {
+  width: 14px;
+  height: 14px;
 }
 
 .chat-status {

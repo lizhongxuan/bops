@@ -16,6 +16,7 @@ type Pipeline struct {
 	sessionLane    *SessionLane
 	globalLane     *GlobalLane
 	draftStore     *DraftStore
+	checkpoints    *CheckPointStore
 }
 
 func New(cfg Config) (*Pipeline, error) {
@@ -30,6 +31,7 @@ func New(cfg Config) (*Pipeline, error) {
 		sessionLane: NewSessionLane(),
 		globalLane:  NewGlobalLane(defaultGlobalLaneConcurrency),
 		draftStore:  NewDraftStore(),
+		checkpoints: NewCheckPointStore(),
 	}
 	gen, err := p.buildGenerateGraph()
 	if err != nil {
