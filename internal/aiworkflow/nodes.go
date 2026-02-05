@@ -346,25 +346,9 @@ func (p *Pipeline) chatWithThought(ctx context.Context, messages []ai.Message, s
 			zap.Duration("elapsed", time.Since(started)),
 		)
 	}
-	if sink != nil {
-		if client, ok := p.cfg.Client.(ai.StreamClient); ok {
-			reply, thought, err := client.ChatStream(ctx, messages, func(delta ai.StreamDelta) {
-				if sink != nil {
-					sink(delta)
-				}
-			})
-			logResponse(reply, thought, err)
-			return reply, thought, err
-		}
-	}
-	if client, ok := p.cfg.Client.(ai.ThoughtClient); ok {
-		reply, thought, err := client.ChatWithThought(ctx, messages)
-		logResponse(reply, thought, err)
-		return reply, thought, err
-	}
-	reply, err := p.cfg.Client.Chat(ctx, messages)
-	logResponse(reply, "", err)
-	return reply, "", err
+	reply, thought, err := runChatWithADK(ctx, p.cfg.Client, messages, sink)
+	logResponse(reply, thought, err)
+	return reply, thought, err
 }
 
 func countSteps(yamlText string) int {

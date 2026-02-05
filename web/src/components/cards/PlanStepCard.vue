@@ -1,7 +1,10 @@
 <template>
   <div class="card plan-step-card">
     <div class="line">
-      <span class="status" :class="statusClass">({{ statusLabel }})</span>
+      <span class="status" :class="statusClass">
+        <span v-if="isRunning" class="status-spinner"></span>
+        ({{ statusLabel }})
+      </span>
       <span class="title">{{ card.step_name || card.step_id || "步骤" }}</span>
       <span v-if="card.change_summary" class="summary"> · {{ card.change_summary }}</span>
     </div>
@@ -44,6 +47,8 @@ const statusClass = computed(() => {
   if (raw === "updated") return "updated";
   return "neutral";
 });
+
+const isRunning = computed(() => statusClass.value === "running");
 </script>
 
 <style scoped>
@@ -74,6 +79,17 @@ const statusClass = computed(() => {
 
 .status {
   font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.status-spinner {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: currentColor;
+  animation: status-pulse 1s ease-in-out infinite;
 }
 
 .status.running {
@@ -98,5 +114,20 @@ const statusClass = computed(() => {
 
 .status.neutral {
   color: #6f6f6f;
+}
+
+@keyframes status-pulse {
+  0% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+  100% {
+    opacity: 0.3;
+    transform: scale(0.8);
+  }
 }
 </style>

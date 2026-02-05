@@ -20,7 +20,7 @@ type coordinatorPayload struct {
 	Missing []string   `json:"missing,omitempty"`
 }
 
-func (p *Pipeline) RunMultiCreate(ctx context.Context, prompt string, context map[string]any, opts RunOptions) (*State, error) {
+func (p *Pipeline) runMultiCreateLegacy(ctx context.Context, prompt string, context map[string]any, opts RunOptions) (*State, error) {
 	if p == nil {
 		return nil, errors.New("pipeline is nil")
 	}
@@ -114,10 +114,18 @@ func (p *Pipeline) RunMultiCreate(ctx context.Context, prompt string, context ma
 		if patch.StepName == "" {
 			patch.StepName = step.StepName
 		}
+		patch = alignStepPatchWithPlan(draftStore, draftID, patch)
 		patch.Source = "coder"
 		draftStore.UpdateStep(draftID, patch)
+		var yamlText string
+		if snapshot := draftStore.Snapshot(draftID); snapshot.DraftID != "" {
+			if next, err := buildFinalYAML(snapshot); err == nil {
+				yamlText = next
+			}
+		}
 		emitStepEvent(state, "step_patch_created", step, "done", patch.Summary, map[string]any{
 			"step_patch": patch,
+			"yaml":       yamlText,
 		})
 
 		reviewResult := p.reviewStep(ctx, state, draftStore, draftID, ReviewTask{
@@ -418,6 +426,7 @@ func (p *Pipeline) reviewStep(ctx context.Context, state *State, store *DraftSto
 			}
 		}
 	}
+	patch = alignStepPatchWithPlan(store, draftID, patch)
 	store.UpdateStep(draftID, patch)
 	result := ReviewResult{
 		StepID:   stepID,
@@ -452,9 +461,9 @@ func (p *Pipeline) reviewStep(ctx context.Context, state *State, store *DraftSto
 		status = "error"
 	}
 	emitCustomEvent(state, "review_done", status, patch.Summary, map[string]any{
-		"step_id":   stepID,
-		"step_name": patch.StepName,
-		"issues":    result.Issues,
+		"step_id":    stepID,
+		"step_name":  patch.StepName,
+		"issues":     result.Issues,
 		"step_patch": patch,
 		"yaml":       yamlText,
 	})

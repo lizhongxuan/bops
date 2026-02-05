@@ -49,6 +49,33 @@ func normalizeStepPatch(patch StepPatch) (StepPatch, error) {
 	return patch, nil
 }
 
+func alignStepPatchWithPlan(store *DraftStore, draftID string, patch StepPatch) StepPatch {
+	if store == nil {
+		return patch
+	}
+	snapshot := store.Snapshot(draftID)
+	if snapshot.DraftID == "" || len(snapshot.Plan) == 0 {
+		return patch
+	}
+	if patch.StepID != "" {
+		for _, step := range snapshot.Plan {
+			if step.ID == patch.StepID {
+				return patch
+			}
+		}
+	}
+	for _, step := range snapshot.Plan {
+		if strings.EqualFold(step.StepName, patch.StepName) {
+			patch.StepID = step.ID
+			if patch.StepName == "" {
+				patch.StepName = step.StepName
+			}
+			return patch
+		}
+	}
+	return patch
+}
+
 func validateStepPatch(patch StepPatch) []string {
 	issues := []string{}
 	if strings.TrimSpace(patch.StepName) == "" {

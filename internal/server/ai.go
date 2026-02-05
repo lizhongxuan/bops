@@ -121,21 +121,23 @@ type aiDraftResponse struct {
 }
 
 type aiStreamRequest struct {
-	Mode         string         `json:"mode,omitempty"`
-	AgentMode    string         `json:"agent_mode,omitempty"`
-	AgentName    string         `json:"agent_name,omitempty"`
-	Agents       []string       `json:"agents,omitempty"`
-	SessionKey   string         `json:"session_key,omitempty"`
-	Prompt       string         `json:"prompt,omitempty"`
-	Script       string         `json:"script,omitempty"`
-	YAML         string         `json:"yaml,omitempty"`
-	Issues       []string       `json:"issues,omitempty"`
-	Context      map[string]any `json:"context,omitempty"`
-	Env          string         `json:"env,omitempty"`
-	Execute      bool           `json:"execute,omitempty"`
-	MaxRetries   int            `json:"max_retries,omitempty"`
-	LoopMaxIters int            `json:"loop_max_iters,omitempty"`
-	DraftID      string         `json:"draft_id,omitempty"`
+	Mode               string         `json:"mode,omitempty"`
+	AgentMode          string         `json:"agent_mode,omitempty"`
+	AgentName          string         `json:"agent_name,omitempty"`
+	Agents             []string       `json:"agents,omitempty"`
+	SessionKey         string         `json:"session_key,omitempty"`
+	Prompt             string         `json:"prompt,omitempty"`
+	Script             string         `json:"script,omitempty"`
+	YAML               string         `json:"yaml,omitempty"`
+	Issues             []string       `json:"issues,omitempty"`
+	Context            map[string]any `json:"context,omitempty"`
+	Env                string         `json:"env,omitempty"`
+	Execute            bool           `json:"execute,omitempty"`
+	MaxRetries         int            `json:"max_retries,omitempty"`
+	LoopMaxIters       int            `json:"loop_max_iters,omitempty"`
+	DraftID            string         `json:"draft_id,omitempty"`
+	ResumeCheckpointID string         `json:"resume_checkpoint_id,omitempty"`
+	PauseAfterStep     bool           `json:"pause_after_step,omitempty"`
 }
 
 const (
@@ -723,6 +725,8 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 		zap.Int("max_retries", req.MaxRetries),
 		zap.String("env", envName),
 		zap.String("draft_id", strings.TrimSpace(req.DraftID)),
+		zap.String("resume_checkpoint_id", strings.TrimSpace(req.ResumeCheckpointID)),
+		zap.Bool("pause_after_step", req.PauseAfterStep),
 	)
 
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -760,15 +764,17 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 	}
 	systemPrompt := s.systemPrompt(contextText)
 	opts := aiworkflow.RunOptions{
-		SystemPrompt:  systemPrompt,
-		ContextText:   contextText,
-		ValidationEnv: env,
-		SkipExecute:   !req.Execute,
-		MaxRetries:    req.MaxRetries,
-		EventSink:     sink,
-		StreamSink:    streamSink,
-		BaseYAML:      baseYAML,
-		DraftID:       strings.TrimSpace(req.DraftID),
+		SystemPrompt:       systemPrompt,
+		ContextText:        contextText,
+		ValidationEnv:      env,
+		SkipExecute:        !req.Execute,
+		MaxRetries:         req.MaxRetries,
+		EventSink:          sink,
+		StreamSink:         streamSink,
+		BaseYAML:           baseYAML,
+		DraftID:            strings.TrimSpace(req.DraftID),
+		ResumeCheckpointID: strings.TrimSpace(req.ResumeCheckpointID),
+		PauseAfterStep:     req.PauseAfterStep,
 	}
 	if sessionKey := strings.TrimSpace(req.SessionKey); sessionKey != "" {
 		opts.SessionKey = sessionKey
@@ -1264,7 +1270,20 @@ func buildCardFromEvent(evt aiworkflow.Event, replyID string) (map[string]any, b
 	}
 	switch eventType {
 	case "plan_step_start", "plan_step_done":
-		cardID := "plan-step-current"
+		cardID := ""
+		if stepID != "" {
+			cardID = fmt.Sprintf("plan-step-%s", stepID)
+		} else if stepName != "" {
+			cardID = fmt.Sprintf("plan-step-%s", stepName)
+		} else {
+			cardID = fmt.Sprintf("plan-step-%d", time.Now().UnixNano())
+		}
+		stepStatus := evt.Status
+		if eventType == "plan_step_start" {
+			stepStatus = "in_progress"
+		} else if eventType == "plan_step_done" && strings.TrimSpace(stepStatus) == "" {
+			stepStatus = "done"
+		}
 		return map[string]any{
 			"card_id":        cardID,
 			"reply_id":       replyID,
@@ -1272,7 +1291,7 @@ func buildCardFromEvent(evt aiworkflow.Event, replyID string) (map[string]any, b
 			"step_id":        stepID,
 			"step_name":      stepName,
 			"event_type":     eventType,
-			"step_status":    evt.Status,
+			"step_status":    stepStatus,
 			"change_summary": summarizeStepChange(evt.Message, ""),
 			"agent_name":     evt.AgentName,
 			"agent_role":     evt.AgentRole,
@@ -1307,7 +1326,10 @@ func buildCardFromEvent(evt aiworkflow.Event, replyID string) (map[string]any, b
 		}
 		stepStatus := evt.Status
 		if eventType == "step_patch_created" {
-			stepStatus = "updated"
+			normalized := strings.ToLower(strings.TrimSpace(stepStatus))
+			if normalized == "" || normalized == "done" || normalized == "success" || normalized == "completed" {
+				stepStatus = "in_progress"
+			}
 		}
 		return map[string]any{
 			"card_id":        cardID,
@@ -1321,6 +1343,32 @@ func buildCardFromEvent(evt aiworkflow.Event, replyID string) (map[string]any, b
 			"issues":         issues,
 			"step_patch":     stepPatch,
 			"yaml":           yamlText,
+			"agent_name":     evt.AgentName,
+			"agent_role":     evt.AgentRole,
+			"parent_step_id": stepID,
+		}, true
+	case "tool_start", "tool_done":
+		cardID := ""
+		if stepID != "" {
+			cardID = fmt.Sprintf("plan-step-%s", stepID)
+		} else {
+			cardID = fmt.Sprintf("plan-step-%d", time.Now().UnixNano())
+		}
+		stepStatus := evt.Status
+		if eventType == "tool_start" {
+			stepStatus = "in_progress"
+		} else if stepStatus == "" {
+			stepStatus = "done"
+		}
+		return map[string]any{
+			"card_id":        cardID,
+			"reply_id":       replyID,
+			"card_type":      cardTypePlanStep,
+			"step_id":        stepID,
+			"step_name":      stepName,
+			"event_type":     eventType,
+			"step_status":    stepStatus,
+			"change_summary": summarizeStepChange(evt.Message, ""),
 			"agent_name":     evt.AgentName,
 			"agent_role":     evt.AgentRole,
 			"parent_step_id": stepID,

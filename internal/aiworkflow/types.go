@@ -91,6 +91,8 @@ type RunOptions struct {
 	LoopMaxIters         int
 	FallbackToPipeline   bool
 	FallbackSystemPrompt string
+	ResumeCheckpointID   string
+	PauseAfterStep       bool
 }
 
 type AgentSpec struct {
