@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"bops/internal/scriptstore"
+	"bops/runner/scriptstore"
 )
 
 type scriptListResponse struct {

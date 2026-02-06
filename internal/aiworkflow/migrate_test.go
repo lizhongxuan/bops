@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"bops/internal/workflow"
+	"bops/runner/workflow"
 )
 
 func TestConvertScriptToYAML(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"regexp"
 	"strings"
 
-	"bops/internal/workflow"
+	"bops/runner/workflow"
 	"gopkg.in/yaml.v3"
 )
 

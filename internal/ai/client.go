@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"bops/internal/logging"
+	"bops/runner/logging"
 	"go.uber.org/zap"
 )
 

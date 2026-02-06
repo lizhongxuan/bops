@@ -1,7 +1,7 @@
 package report
 
 import (
-	"bops/internal/state"
+	"bops/runner/state"
 	"time"
 )
 

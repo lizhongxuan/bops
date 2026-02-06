@@ -9,9 +9,9 @@ import (
 	"time"
 
 	"bops/internal/ai"
-	"bops/internal/logging"
+	"bops/runner/logging"
 	"bops/internal/validationrun"
-	"bops/internal/workflow"
+	"bops/runner/workflow"
 	"go.uber.org/zap"
 )
 

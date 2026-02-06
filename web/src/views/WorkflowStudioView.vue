@@ -976,7 +976,8 @@ const route = useRoute();
 const router = useRouter();
 const workflowName = computed(() => String(route.params.name || "workflow"));
 const flowLink = computed(() => `/workflows/${workflowName.value}/flow`);
-const yaml = ref(defaultYaml(workflowName.value));
+const yaml = ref(defaultStepsYaml(workflowName.value));
+const inventoryYaml = ref(defaultInventoryYaml());
 const workflowTitle = ref("");
 const workflowDescription = ref("");
 const metaEditing = ref(false);
@@ -1074,8 +1075,8 @@ const supportedActions = [
 ];
 
 const steps = computed(() => parseSteps(yaml.value));
-const inventoryGroups = computed(() => parseInventoryGroups(yaml.value));
-const inventoryHosts = computed(() => parseInventoryHosts(yaml.value));
+const inventoryGroups = computed(() => parseInventoryGroups(inventoryYaml.value));
+const inventoryHosts = computed(() => parseInventoryHosts(inventoryYaml.value));
 const unsupportedActions = computed(() => {
   const actions = new Set<string>();
   for (const step of steps.value) {
@@ -1175,7 +1176,7 @@ function toggleInventory() {
 
 function addInventoryGroup() {
   const base = newGroupName.value.trim() || "new-group";
-  yaml.value = updateInventoryGroups(yaml.value, (groups) => {
+  inventoryYaml.value = updateInventoryGroups(inventoryYaml.value, (groups) => {
     const name = ensureUniqueName(base, groups.map((group) => group.name));
     return [...groups, { name, hosts: [] }];
   });
@@ -1185,7 +1186,7 @@ function addInventoryGroup() {
 function updateInventoryGroupName(groupIndex: number, value: string) {
   const trimmed = value.trim();
   if (!trimmed) return;
-  yaml.value = updateInventoryGroups(yaml.value, (groups) => {
+  inventoryYaml.value = updateInventoryGroups(inventoryYaml.value, (groups) => {
     if (!groups[groupIndex]) return groups;
     const otherNames = groups
       .map((group, index) => (index === groupIndex ? "" : group.name))
@@ -1196,7 +1197,7 @@ function updateInventoryGroupName(groupIndex: number, value: string) {
 }
 
 function removeInventoryGroup(groupIndex: number) {
-  yaml.value = updateInventoryGroups(yaml.value, (groups) =>
+  inventoryYaml.value = updateInventoryGroups(inventoryYaml.value, (groups) =>
     groups.filter((_, index) => index !== groupIndex)
   );
 }
@@ -1205,7 +1206,7 @@ function addInventoryHost(groupIndex: number) {
   const draft = hostDrafts.value[groupIndex] || "";
   const trimmed = draft.trim();
   if (!trimmed) return;
-  yaml.value = updateInventoryGroups(yaml.value, (groups) => {
+  inventoryYaml.value = updateInventoryGroups(inventoryYaml.value, (groups) => {
     if (!groups[groupIndex]) return groups;
     const hosts = groups[groupIndex].hosts;
     const nextName = ensureUniqueName(trimmed, hosts);
@@ -1218,7 +1219,7 @@ function addInventoryHost(groupIndex: number) {
 function updateInventoryHost(groupIndex: number, hostIndex: number, value: string) {
   const trimmed = value.trim();
   if (!trimmed) return;
-  yaml.value = updateInventoryGroups(yaml.value, (groups) => {
+  inventoryYaml.value = updateInventoryGroups(inventoryYaml.value, (groups) => {
     if (!groups[groupIndex]) return groups;
     const hosts = groups[groupIndex].hosts;
     if (!hosts[hostIndex]) return groups;
@@ -1230,7 +1231,7 @@ function updateInventoryHost(groupIndex: number, hostIndex: number, value: strin
 }
 
 function removeInventoryHost(groupIndex: number, hostIndex: number) {
-  yaml.value = updateInventoryGroups(yaml.value, (groups) => {
+  inventoryYaml.value = updateInventoryGroups(inventoryYaml.value, (groups) => {
     if (!groups[groupIndex]) return groups;
     groups[groupIndex].hosts = groups[groupIndex].hosts.filter((_, idx) => idx !== hostIndex);
     return groups;
@@ -1241,7 +1242,7 @@ function addInventoryHostItem() {
   const name = newHostName.value.trim();
   if (!name) return;
   const address = newHostAddress.value.trim();
-  yaml.value = updateInventoryHosts(yaml.value, (hosts) => {
+  inventoryYaml.value = updateInventoryHosts(inventoryYaml.value, (hosts) => {
     const nextName = ensureUniqueName(name, hosts.map((host) => host.name));
     return [...hosts, { name: nextName, address }];
   });
@@ -1252,7 +1253,7 @@ function addInventoryHostItem() {
 function updateInventoryHostNameByIndex(index: number, value: string) {
   const trimmed = value.trim();
   if (!trimmed) return;
-  yaml.value = updateInventoryHosts(yaml.value, (hosts) => {
+  inventoryYaml.value = updateInventoryHosts(inventoryYaml.value, (hosts) => {
     if (!hosts[index]) return hosts;
     const other = hosts.filter((_, idx) => idx !== index).map((host) => host.name);
     hosts[index].name = ensureUniqueName(trimmed, other);
@@ -1262,7 +1263,7 @@ function updateInventoryHostNameByIndex(index: number, value: string) {
 
 function updateInventoryHostAddressByIndex(index: number, value: string) {
   const trimmed = value.trim();
-  yaml.value = updateInventoryHosts(yaml.value, (hosts) => {
+  inventoryYaml.value = updateInventoryHosts(inventoryYaml.value, (hosts) => {
     if (!hosts[index]) return hosts;
     hosts[index].address = trimmed;
     return hosts;
@@ -1270,7 +1271,7 @@ function updateInventoryHostAddressByIndex(index: number, value: string) {
 }
 
 function removeInventoryHostItem(index: number) {
-  yaml.value = updateInventoryHosts(yaml.value, (hosts) =>
+  inventoryYaml.value = updateInventoryHosts(inventoryYaml.value, (hosts) =>
     hosts.filter((_, idx) => idx !== index)
   );
 }
@@ -1284,6 +1285,68 @@ function ensureUniqueName(name: string, existing: string[]) {
     next = `${name}-${counter}`;
   }
   return next;
+}
+
+function validateInventoryBeforeRun() {
+  const hostNames = new Set<string>();
+  for (const host of inventoryHosts.value) {
+    if (host.name) hostNames.add(host.name);
+  }
+  for (const group of inventoryGroups.value) {
+    for (const host of group.hosts) {
+      if (host) hostNames.add(host);
+    }
+  }
+  if (hostNames.size === 0) {
+    return "请先在“主机/分组”中配置至少一个主机。";
+  }
+
+  const groupMap = new Map<string, string[]>();
+  for (const group of inventoryGroups.value) {
+    groupMap.set(group.name, group.hosts || []);
+  }
+
+  const issues: string[] = [];
+  for (const step of steps.value) {
+    const targets = parseTargetList(step.targets);
+    if (targets.length === 0) {
+      continue;
+    }
+    for (const target of targets) {
+      if (hostNames.has(target)) continue;
+      if (groupMap.has(target)) {
+        const hosts = groupMap.get(target) || [];
+        if (!hosts.length) {
+          issues.push(`分组 ${target} 没有配置主机`);
+        }
+        continue;
+      }
+      issues.push(`目标 ${target} 未在 inventory 中定义`);
+    }
+  }
+
+  if (!issues.length) return "";
+  return `请检查主机/分组配置：${issues.join("；")}`;
+}
+
+function parseTargetList(raw: string) {
+  const trimmed = (raw || "").trim();
+  if (!trimmed) return [];
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+    const inner = trimmed.slice(1, -1).trim();
+    if (!inner) return [];
+    return inner
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  if (trimmed.includes(",")) {
+    return trimmed
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+  return [trimmed];
 }
 
 function toggleTemplates() {
@@ -1799,6 +1862,11 @@ function closeStepDetail() {
 
 async function planRun() {
   if (runBusy.value) return;
+  const inventoryIssue = validateInventoryBeforeRun();
+  if (inventoryIssue) {
+    runMessage.value = inventoryIssue;
+    return;
+  }
   runBusy.value = true;
   runMessage.value = "正在生成计划...";
   try {
@@ -1814,6 +1882,11 @@ async function planRun() {
 
 async function applyRun() {
   if (runBusy.value) return;
+  const inventoryIssue = validateInventoryBeforeRun();
+  if (inventoryIssue) {
+    runMessage.value = inventoryIssue;
+    return;
+  }
   runBusy.value = true;
   runMessage.value = "执行中...";
   try {
@@ -1870,9 +1943,14 @@ async function saveYaml(): Promise<boolean> {
   saving.value = true;
   let saved = false;
   try {
-    await request(`/workflows/${workflowName.value}`, {
+    await request(`/workflows/${workflowName.value}/steps`, {
       method: "PUT",
       body: { yaml: yaml.value }
+    });
+    await request(`/workflows/${workflowName.value}/inventory`, {
+      method: "PUT",
+      body: { yaml: inventoryYaml.value },
+      headers: { "X-Workflow-Editor": "manual" }
     });
     savedAt.value = new Date();
     isDirty.value = false;
@@ -1967,6 +2045,10 @@ watch(yaml, () => {
   syncMetaFromYaml();
 });
 
+watch(inventoryYaml, () => {
+  scheduleAutoSave();
+});
+
 onBeforeRouteLeave(async () => {
   cancelAutoSave();
   if (isDirty.value) {
@@ -1984,39 +2066,60 @@ watch(
 async function loadYaml() {
   loading.value = true;
   try {
-    const data = await request<{ yaml: string }>(`/workflows/${workflowName.value}`);
-    yaml.value = data.yaml || defaultYaml(workflowName.value);
-    savedAt.value = new Date();
-    isDirty.value = false;
-    errorLines.value = [];
+    const stepsData = await request<{ yaml: string }>(`/workflows/${workflowName.value}/steps`);
+    yaml.value = stepsData.yaml || defaultStepsYaml(workflowName.value);
   } catch (err) {
-    if ((err as ApiError).status === 404) {
-      const fallback = defaultYaml(workflowName.value);
-      yaml.value = fallback;
+    const apiErr = err as ApiError;
+    if (apiErr.status === 404) {
+      const stepsFallback = defaultStepsYaml(workflowName.value);
+      yaml.value = stepsFallback;
       try {
-        await request(`/workflows/${workflowName.value}`, {
+        await request(`/workflows/${workflowName.value}/steps`, {
           method: "PUT",
-          body: { yaml: fallback }
+          body: { yaml: stepsFallback }
         });
-        savedAt.value = new Date();
-        isDirty.value = false;
-        errorLines.value = [];
-      } catch (saveErr) {
-        savedAt.value = null;
+      } catch {
         validation.value = {
           ok: false,
-          issues: ["创建默认工作流失败，请检查服务是否启动"]
+          issues: ["创建默认 steps 失败，请检查服务是否启动"]
         };
       }
     } else {
-      validation.value = {
-        ok: false,
-        issues: ["加载失败，请检查服务是否启动"]
-      };
+      validation.value = { ok: false, issues: ["加载 steps 失败，请检查服务是否启动"] };
     }
-  } finally {
-    loading.value = false;
   }
+
+  try {
+    const invData = await request<{ yaml: string }>(`/workflows/${workflowName.value}/inventory`, {
+      headers: { "X-Workflow-Editor": "manual" }
+    });
+    inventoryYaml.value = invData.yaml || defaultInventoryYaml();
+  } catch (err) {
+    const apiErr = err as ApiError;
+    if (apiErr.status === 404) {
+      const invFallback = defaultInventoryYaml();
+      inventoryYaml.value = invFallback;
+      try {
+        await request(`/workflows/${workflowName.value}/inventory`, {
+          method: "PUT",
+          body: { yaml: invFallback },
+          headers: { "X-Workflow-Editor": "manual" }
+        });
+      } catch {
+        validation.value = {
+          ok: false,
+          issues: ["创建默认 inventory 失败，请检查服务是否启动"]
+        };
+      }
+    } else {
+      validation.value = { ok: false, issues: ["加载 inventory 失败，请检查服务是否启动"] };
+    }
+  }
+
+  savedAt.value = new Date();
+  isDirty.value = false;
+  errorLines.value = [];
+  loading.value = false;
   await validateYaml();
 }
 
@@ -3229,19 +3332,10 @@ function formatTime(date: Date) {
   });
 }
 
-function defaultYaml(name: string) {
+function defaultStepsYaml(name: string) {
   return `version: v0.1
 name: ${name}
 description: install and config nginx
-
-inventory:
-  groups:
-    web:
-      hosts:
-        - web1
-        - web2
-  vars:
-    ssh_user: ops
 
 vars:
   conf_src: nginx.conf.j2
@@ -3270,6 +3364,18 @@ steps:
     with:
       name: nginx
       state: started
+`;
+}
+
+function defaultInventoryYaml() {
+  return `inventory:
+  groups:
+    web:
+      hosts:
+        - web1
+        - web2
+  vars:
+    ssh_user: ops
 `;
 }
 </script>

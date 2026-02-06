@@ -5,9 +5,9 @@ import (
 	"time"
 
 	"bops/internal/core"
-	"bops/internal/scheduler"
-	"bops/internal/state"
-	"bops/internal/workflow"
+	"bops/runner/scheduler"
+	"bops/runner/state"
+	"bops/runner/workflow"
 )
 
 type Recorder struct {

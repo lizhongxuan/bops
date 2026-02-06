@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"bops/internal/logging"
+	"bops/runner/logging"
 	"github.com/cloudwego/eino/compose"
 	"go.uber.org/zap"
 )

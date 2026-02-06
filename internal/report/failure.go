@@ -1,6 +1,6 @@
 package report
 
-import "bops/internal/state"
+import "bops/runner/state"
 
 type FailureReport struct {
 	RunID  string         `json:"run_id"`

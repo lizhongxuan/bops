@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"bops/internal/logging"
+	"bops/runner/logging"
 	"bops/internal/validationenv"
 	"go.uber.org/zap"
 )

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"strings"
 
-	"bops/internal/workflow"
+	"bops/runner/workflow"
 )
 
 func ConvertScriptToYAML(scriptText string) (string, error) {

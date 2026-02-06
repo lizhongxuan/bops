@@ -6,9 +6,9 @@ import (
 )
 
 var missingQuestionMap = map[string]string{
-	"targets":         "需要在哪些主机或环境上执行？",
-	"hosts":           "目标主机或主机组有哪些？",
-	"inventory":       "是否要使用特定的 inventory 或环境？",
+	"targets":         "请在 Inventory 页面补充目标主机/分组。",
+	"hosts":           "请在 Inventory 页面补充目标主机/分组。",
+	"inventory":       "请在 Inventory 页面补充主机/分组与变量配置。",
 	"env":             "需要哪些环境变量或环境包？",
 	"env_packages":    "需要安装哪些环境包？",
 	"validation_env":  "使用哪个验证环境？",
