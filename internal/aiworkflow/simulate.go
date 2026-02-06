@@ -5,7 +5,7 @@ import (
 	"sort"
 	"strings"
 
-	"bops/internal/workflow"
+	"bops/runner/workflow"
 )
 
 type SimulationStep struct {

@@ -13,11 +13,11 @@ import (
 	"bops/internal/aistore"
 	"bops/internal/aiworkflow"
 	"bops/internal/aiworkflowstore"
-	"bops/internal/logging"
+	"bops/runner/logging"
 	"bops/internal/skills"
 	"bops/internal/validationenv"
 	"bops/internal/validationrun"
-	"bops/internal/workflow"
+	"bops/runner/workflow"
 	"github.com/cloudwego/eino/components/tool"
 	"go.uber.org/zap"
 )

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"bops/internal/logging"
+	"bops/runner/logging"
 	"github.com/cloudwego/eino/components/tool"
 	"github.com/cloudwego/eino/schema"
 	einojsonschema "github.com/eino-contrib/jsonschema"

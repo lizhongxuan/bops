@@ -9,20 +9,14 @@ import (
 	"path/filepath"
 
 	"bops/internal/config"
-	"bops/internal/engine"
-	"bops/internal/logging"
-	"bops/internal/modules"
-	"bops/internal/modules/cmd"
-	"bops/internal/modules/envset"
-	"bops/internal/modules/pkg"
-	"bops/internal/modules/script"
-	"bops/internal/modules/service"
-	"bops/internal/modules/template"
+	"bops/runner/engine"
+	"bops/runner/logging"
+	"bops/runner/modules"
 	"bops/internal/report"
-	"bops/internal/scriptstore"
+	"bops/runner/scriptstore"
 	"bops/internal/server"
-	"bops/internal/state"
-	"bops/internal/workflow"
+	"bops/runner/state"
+	"bops/runner/workflow"
 	"go.uber.org/zap"
 )
 
@@ -32,7 +26,8 @@ func main() {
 		os.Exit(2)
 	}
 
-	_, _ = logging.Init(config.DefaultConfig())
+	defaultCfg := config.DefaultConfig()
+	_, _ = logging.Init(logging.Config{LogLevel: defaultCfg.LogLevel, LogFormat: defaultCfg.LogFormat})
 
 	switch os.Args[1] {
 	case "plan":
@@ -147,7 +142,7 @@ func runStatus(args []string) error {
 		return err
 	}
 
-	_, _ = logging.Init(cfg)
+	_, _ = logging.Init(logging.Config{LogLevel: cfg.LogLevel, LogFormat: cfg.LogFormat})
 	logging.L().Debug("status requested")
 	store := state.NewFileStore(cfg.StatePath)
 	data, err := store.Load()
@@ -175,7 +170,7 @@ func runServe(args []string) error {
 	if err != nil {
 		return err
 	}
-	_, _ = logging.Init(cfg)
+	_, _ = logging.Init(logging.Config{LogLevel: cfg.LogLevel, LogFormat: cfg.LogFormat})
 	logging.L().Info("server starting",
 		zap.String("listen", cfg.ServerListen),
 		zap.String("static_dir", cfg.StaticDir),
@@ -207,17 +202,7 @@ func defaultRegistry() *modules.Registry {
 		dataDir = cfg.DataDir
 	}
 	scriptStore := scriptstore.New(filepath.Join(dataDir, "scripts"))
-
-	reg := modules.NewRegistry()
-	_ = reg.Register("cmd.run", cmd.New())
-	_ = reg.Register("env.set", envset.New())
-	_ = reg.Register("pkg.install", pkg.New())
-	_ = reg.Register("script.shell", script.New("shell", scriptStore))
-	_ = reg.Register("script.python", script.New("python", scriptStore))
-	_ = reg.Register("template.render", template.New())
-	_ = reg.Register("service.ensure", service.New())
-	_ = reg.Register("service.restart", service.New())
-	return reg
+	return engine.DefaultRegistry(scriptStore)
 }
 
 func printJSON(value any) error {

@@ -12,11 +12,11 @@ import (
 	"bops/internal/envstore"
 	"bops/internal/eventbus"
 	"bops/internal/runmanager"
-	"bops/internal/scheduler"
-	"bops/internal/scriptstore"
-	"bops/internal/state"
-	"bops/internal/workflow"
-	"bops/internal/workflowstore"
+	"bops/internal/stepsstore"
+	"bops/runner/scheduler"
+	"bops/runner/scriptstore"
+	"bops/runner/state"
+	"bops/runner/workflow"
 )
 
 func newRunTestServer(t *testing.T) (*Server, *runmanager.Manager) {
@@ -26,7 +26,7 @@ func newRunTestServer(t *testing.T) (*Server, *runmanager.Manager) {
 	runs := runmanager.NewWithBus(state.NewFileStore(filepath.Join(dir, "state.json")), bus)
 	srv := &Server{
 		mux:         http.NewServeMux(),
-		store:       workflowstore.New(filepath.Join(dir, "workflows")),
+		store:       stepsstore.New(filepath.Join(dir, "workflows")),
 		envStore:    envstore.New(filepath.Join(dir, "envs")),
 		aiStore:     aistore.New(filepath.Join(dir, "ai_sessions")),
 		scriptStore: scriptstore.New(filepath.Join(dir, "scripts")),

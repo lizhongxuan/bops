@@ -8,9 +8,9 @@ import (
 
 	"bops/internal/core"
 	"bops/internal/eventbus"
-	"bops/internal/logging"
-	"bops/internal/state"
-	"bops/internal/workflow"
+	"bops/runner/logging"
+	"bops/runner/state"
+	"bops/runner/workflow"
 	"go.uber.org/zap"
 )
 

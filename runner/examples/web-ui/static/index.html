@@ -1,0 +1,192 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Runner Web UI</title>
+    <style>
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        margin: 0;
+        padding: 24px;
+        background: #f7f7f9;
+        color: #222;
+      }
+      .container {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 16px;
+      }
+      .card {
+        background: #fff;
+        border: 1px solid #e5e5e5;
+        border-radius: 8px;
+        padding: 16px;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+      }
+      textarea {
+        width: 100%;
+        min-height: 280px;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+        font-size: 12px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+        padding: 8px;
+      }
+      .row {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+      }
+      .row input, .row select {
+        padding: 6px 8px;
+        border: 1px solid #ddd;
+        border-radius: 6px;
+      }
+      button {
+        background: #1a73e8;
+        color: #fff;
+        border: none;
+        padding: 8px 14px;
+        border-radius: 6px;
+        cursor: pointer;
+      }
+      pre {
+        white-space: pre-wrap;
+        word-break: break-all;
+        font-size: 12px;
+        background: #0f172a;
+        color: #e2e8f0;
+        padding: 12px;
+        border-radius: 6px;
+        min-height: 280px;
+      }
+      .status {
+        font-size: 12px;
+        color: #555;
+      }
+    </style>
+  </head>
+  <body>
+    <h2>Runner Web UI</h2>
+    <div class="row">
+      <label>Token:</label>
+      <input id="token" type="text" placeholder="runner-token" />
+      <label>Mode:</label>
+      <select id="mode">
+        <option value="agent">agent</option>
+        <option value="local">local</option>
+      </select>
+      <button id="run">运行</button>
+      <span class="status" id="status"></span>
+    </div>
+
+    <div class="container" style="margin-top:16px;">
+      <div class="card">
+        <h4>YAML</h4>
+        <textarea id="yaml"></textarea>
+      </div>
+      <div class="card">
+        <h4>日志</h4>
+        <pre id="log"></pre>
+      </div>
+    </div>
+
+    <script>
+      const yamlEl = document.getElementById("yaml");
+      const logEl = document.getElementById("log");
+      const statusEl = document.getElementById("status");
+      const tokenEl = document.getElementById("token");
+      const modeEl = document.getElementById("mode");
+
+      yamlEl.value = `version: v0.1
+name: macos-multi-agent-demo
+inventory:
+  hosts:
+    agent_a:
+      address: "http://127.0.0.1:7072"
+    agent_b:
+      address: "http://127.0.0.1:7073"
+    agent_c:
+      address: "http://127.0.0.1:7074"
+steps:
+  - name: step-1
+    targets: [agent_a]
+    action: shell.run
+    args:
+      export_vars: true
+      script: |
+        echo "BOPS_EXPORT:HOST_A=agent_a"
+        echo "hello"
+
+  - name: step-2
+    targets: [agent_b]
+    action: shell.run
+    args:
+      export_vars: true
+      script: |
+        echo "from \${HOST_A}"
+        echo "BOPS_EXPORT:HOST_B=agent_b"
+
+  - name: step-3
+    targets: [agent_c]
+    action: shell.run
+    args:
+      script: |
+        echo "from \${HOST_A} -> \${HOST_B}"
+`;
+
+      function appendLog(line) {
+        logEl.textContent += line + "\n";
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      document.getElementById("run").onclick = async () => {
+        logEl.textContent = "";
+        statusEl.textContent = "启动中...";
+        const resp = await fetch("/start", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            yaml: yamlEl.value,
+            token: tokenEl.value,
+            mode: modeEl.value
+          })
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          statusEl.textContent = "启动失败";
+          appendLog(data.error || "start failed");
+          return;
+        }
+        statusEl.textContent = `运行中: ${data.run_id}`;
+        const es = new EventSource(`/stream?run_id=${data.run_id}`);
+        es.onmessage = (evt) => {
+          const payload = JSON.parse(evt.data);
+          if (payload.type === "step_start") {
+            appendLog(`[${payload.step_no}/${payload.step_total}] START ${payload.step}`);
+          } else if (payload.type === "step_finish") {
+            appendLog(`[${payload.step_no}/${payload.step_total}] DONE ${payload.step} (${payload.status})`);
+          } else if (payload.type === "host_result") {
+            appendLog(`  host=${payload.host} status=${payload.status}`);
+            if (payload.stdout) appendLog(`  stdout: ${payload.stdout}`);
+            if (payload.stderr) appendLog(`  stderr: ${payload.stderr}`);
+          } else if (payload.type === "host_output") {
+            appendLog(`  ${payload.stream}: ${payload.chunk}`);
+          } else if (payload.type === "error") {
+            appendLog(`ERROR: ${payload.message}`);
+          } else if (payload.type === "done") {
+            appendLog("DONE");
+            statusEl.textContent = "完成";
+            es.close();
+          }
+        };
+        es.onerror = () => {
+          appendLog("stream closed");
+          statusEl.textContent = "中断";
+          es.close();
+        };
+      };
+    </script>
+  </body>
+</html>

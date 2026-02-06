@@ -10,8 +10,8 @@ import (
 
 	"bops/internal/aistore"
 	"bops/internal/envstore"
-	"bops/internal/scriptstore"
-	"bops/internal/workflowstore"
+	"bops/internal/stepsstore"
+	"bops/runner/scriptstore"
 )
 
 func newScriptTestServer(t *testing.T) *Server {
@@ -19,7 +19,7 @@ func newScriptTestServer(t *testing.T) *Server {
 	dir := t.TempDir()
 	srv := &Server{
 		mux:         http.NewServeMux(),
-		store:       workflowstore.New(filepath.Join(dir, "workflows")),
+		store:       stepsstore.New(filepath.Join(dir, "workflows")),
 		envStore:    envstore.New(filepath.Join(dir, "envs")),
 		aiStore:     aistore.New(filepath.Join(dir, "ai_sessions")),
 		scriptStore: scriptstore.New(filepath.Join(dir, "scripts")),

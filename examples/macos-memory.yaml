@@ -15,7 +15,7 @@ steps:
   - name: show memory status
     targets: [local]
     action: cmd.run
-    with:
+    args:
       cmd: |
         echo "memsize: $(sysctl -n hw.memsize)"
         vm_stat
@@ -23,14 +23,14 @@ steps:
   - name: show top memory process name
     targets: [local]
     action: cmd.run
-    with:
+    args:
       cmd: |
         ps -axo rss,comm | awk 'NR>1' | sort -nr | head -n 1 | awk '{print $2}'
 
   - name: show top process runtime
     targets: [local]
     action: cmd.run
-    with:
+    args:
       cmd: |
         pid=$(ps -axo rss,pid | awk 'NR>1' | sort -nr | head -n 1 | awk '{print $2}')
         ps -p "$pid" -o etime=

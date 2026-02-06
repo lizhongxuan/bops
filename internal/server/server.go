@@ -13,16 +13,16 @@ import (
 	"bops/internal/aiworkflow"
 	"bops/internal/aiworkflowstore"
 	"bops/internal/config"
-	"bops/internal/engine"
+	"bops/runner/engine"
 	"bops/internal/envstore"
 	"bops/internal/eventbus"
-	"bops/internal/logging"
+	"bops/runner/logging"
 	"bops/internal/runmanager"
-	"bops/internal/scriptstore"
+	"bops/runner/scriptstore"
 	"bops/internal/skills"
-	"bops/internal/state"
+	"bops/internal/stepsstore"
+	"bops/runner/state"
 	"bops/internal/validationenv"
-	"bops/internal/workflowstore"
 	"go.uber.org/zap"
 )
 
@@ -34,7 +34,7 @@ type Server struct {
 	cfg             config.Config
 	mux             *http.ServeMux
 	http            *http.Server
-	store           *workflowstore.Store
+	store           *stepsstore.Store
 	envStore        *envstore.Store
 	aiStore         *aistore.Store
 	aiClient        ai.Client
@@ -93,7 +93,7 @@ func New(cfg config.Config, configPath string) *Server {
 		configPath:      configPath,
 		cfg:             cfg,
 		mux:             mux,
-		store:           workflowstore.New(filepath.Join(cfg.DataDir, "workflows")),
+		store:           stepsstore.New(filepath.Join(cfg.DataDir, "workflows")),
 		envStore:        envstore.New(filepath.Join(cfg.DataDir, "envs")),
 		aiStore:         aistore.New(filepath.Join(cfg.DataDir, "ai_sessions")),
 		aiClient:        aiClient,

@@ -2556,6 +2556,13 @@ function findStepsSection(lines: string[]) {
   return { start: startIndex, end: endIndex };
 }
 
+function extractStepsOnlyYaml(content: string) {
+  const lines = content.split(/\r?\n/);
+  const section = findStepsSection(lines);
+  if (!section) return "steps: []";
+  return lines.slice(section.start, section.end).join("\n").trimEnd();
+}
+
 function getStepBlocks(content: string) {
   const lines = content.split(/\r?\n/);
   const section = findStepsSection(lines);
@@ -3243,7 +3250,7 @@ async function startStreamWithMessage(message: string, options: { clearPrompt?: 
   streamError.value = "";
   progressEvents.value = [];
   executeResult.value = null;
-  const currentYaml = stripTargetsFromYaml(getVisualYaml()).trim();
+  const currentYaml = stripTargetsFromYaml(extractStepsOnlyYaml(getVisualYaml())).trim();
   const baseYaml = steps.value.length ? currentYaml : "";
   let agentName = defaultAgent.value;
   let agents = defaultAgents.value.filter((name) => name && name !== agentName);
@@ -3302,7 +3309,7 @@ async function resumePausedWorkflow() {
   streamError.value = "";
   progressEvents.value = [];
   executeResult.value = null;
-  const currentYaml = stripTargetsFromYaml(getVisualYaml()).trim();
+  const currentYaml = stripTargetsFromYaml(extractStepsOnlyYaml(getVisualYaml())).trim();
   const baseYaml = steps.value.length ? currentYaml : "";
   let agentName = defaultAgent.value;
   let agents = defaultAgents.value.filter((name) => name && name !== agentName);
@@ -3669,9 +3676,10 @@ function applyResult(payload: Record<string, unknown>): StreamReply | null {
 async function refreshSummary() {
   if (!yaml.value.trim()) return;
   try {
+    const payloadYaml = extractStepsOnlyYaml(yaml.value);
     const data = await request<SummaryResponse>("/ai/workflow/summary", {
       method: "POST",
-      body: { yaml: yaml.value }
+      body: { yaml: payloadYaml }
     });
     summary.value = {
       summary: data.summary || "",
@@ -3822,7 +3830,7 @@ async function runFix() {
   const payload = {
     mode: "fix",
     agent_mode: "pipeline",
-    yaml: yaml.value,
+    yaml: stripTargetsFromYaml(extractStepsOnlyYaml(yaml.value)),
     issues,
     context: buildContext(),
     env: selectedValidationEnv.value || undefined,

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"bops/internal/logging"
+	"bops/runner/logging"
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/adk/prebuilt/planexecute"
 	"github.com/cloudwego/eino/components/model"

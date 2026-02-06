@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"bops/internal/ai"
-	"bops/internal/logging"
+	"bops/runner/logging"
 	"go.uber.org/zap"
 )
 

@@ -15,7 +15,7 @@ import (
 	"bops/internal/aistore"
 	"bops/internal/aiworkflow"
 	"bops/internal/envstore"
-	"bops/internal/workflowstore"
+	"bops/internal/stepsstore"
 )
 
 type stubAI struct {
@@ -121,7 +121,7 @@ func newTestServer(t *testing.T) *Server {
 	dir := t.TempDir()
 	srv := &Server{
 		mux:       http.NewServeMux(),
-		store:     workflowstore.New(filepath.Join(dir, "workflows")),
+		store:     stepsstore.New(filepath.Join(dir, "workflows")),
 		envStore:  envstore.New(filepath.Join(dir, "envs")),
 		aiStore:   aistore.New(filepath.Join(dir, "ai_sessions")),
 		aiPrompt:  "test prompt",

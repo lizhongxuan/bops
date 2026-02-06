@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"bops/internal/logging"
+	"bops/runner/logging"
 	"go.uber.org/zap"
 	"gopkg.in/yaml.v3"
 )

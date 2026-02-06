@@ -10,17 +10,18 @@ import (
 	"time"
 
 	"bops/internal/core"
-	"bops/internal/engine"
+	"bops/runner/engine"
 	"bops/internal/envstore"
-	"bops/internal/logging"
+	"bops/runner/logging"
+	"bops/internal/stepsstore"
 	"bops/internal/report"
-	"bops/internal/workflow"
-	"bops/internal/workflowstore"
+	"bops/runner/workflow"
 	"go.uber.org/zap"
+	"gopkg.in/yaml.v3"
 )
 
 type listResponse struct {
-	Items []workflowstore.Summary `json:"items"`
+	Items []stepsstore.Summary `json:"items"`
 	Total int                     `json:"total"`
 }
 
@@ -33,6 +34,16 @@ type workflowResponse struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
 	YAML        string `json:"yaml"`
+}
+
+type stepsResponse struct {
+	Name string `json:"name"`
+	YAML string `json:"yaml"`
+}
+
+type inventoryResponse struct {
+	Name string `json:"name"`
+	YAML string `json:"yaml"`
 }
 
 type validateRequest struct {
@@ -238,6 +249,14 @@ func (s *Server) handleWorkflow(w http.ResponseWriter, r *http.Request) {
 		s.handleWorkflowRuns(w, r, strings.TrimSuffix(path, "/runs"))
 		return
 	}
+	if strings.HasSuffix(path, "/steps") {
+		s.handleWorkflowSteps(w, r, strings.TrimSuffix(path, "/steps"))
+		return
+	}
+	if strings.HasSuffix(path, "/inventory") {
+		s.handleWorkflowInventory(w, r, strings.TrimSuffix(path, "/inventory"))
+		return
+	}
 
 	name := strings.Trim(path, "/")
 	if name == "" {
@@ -247,15 +266,20 @@ func (s *Server) handleWorkflow(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodGet:
-		wf, raw, err := s.store.Get(name)
+		wf, err := s.store.LoadWorkflow(name)
 		if err != nil {
 			writeError(w, r, http.StatusNotFound, err.Error())
+			return
+		}
+		raw, err := yaml.Marshal(wf)
+		if err != nil {
+			writeError(w, r, http.StatusInternalServerError, err.Error())
 			return
 		}
 		writeJSON(w, http.StatusOK, workflowResponse{
 			Name:        name,
 			Description: wf.Description,
-			YAML:        string(raw),
+			YAML:        strings.TrimSpace(string(raw)),
 		})
 	case http.MethodPut:
 		body, err := readBody(r)
@@ -272,7 +296,27 @@ func (s *Server) handleWorkflow(w http.ResponseWriter, r *http.Request) {
 			writeError(w, r, http.StatusBadRequest, "yaml is required")
 			return
 		}
-		if _, err := s.store.Put(name, []byte(req.YAML)); err != nil {
+		wf, err := workflow.Load([]byte(req.YAML))
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, err.Error())
+			return
+		}
+		stepsDoc, invDoc := stepsstore.SplitWorkflow(wf, name)
+		stepsRaw, err := yaml.Marshal(stepsDoc)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, err.Error())
+			return
+		}
+		if _, err := s.store.PutSteps(name, stepsRaw); err != nil {
+			writeError(w, r, http.StatusBadRequest, err.Error())
+			return
+		}
+		invRaw, err := yaml.Marshal(invDoc)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, err.Error())
+			return
+		}
+		if _, err := s.store.PutInventory(name, invRaw); err != nil {
 			writeError(w, r, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -332,7 +376,7 @@ func (s *Server) handlePlan(w http.ResponseWriter, r *http.Request, name string)
 		return
 	}
 
-	wf, _, err := s.store.Get(name)
+	wf, err := s.store.LoadWorkflow(name)
 	if err != nil {
 		writeError(w, r, http.StatusNotFound, err.Error())
 		return
@@ -366,7 +410,7 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request, name string
 		return
 	}
 
-	wf, _, err := s.store.Get(name)
+	wf, err := s.store.LoadWorkflow(name)
 	if err != nil {
 		writeError(w, r, http.StatusNotFound, err.Error())
 		return
@@ -395,6 +439,89 @@ func (s *Server) handleApply(w http.ResponseWriter, r *http.Request, name string
 
 	writeJSON(w, http.StatusOK, runResponse{RunID: runID, Status: "running"})
 }
+
+func (s *Server) handleWorkflowSteps(w http.ResponseWriter, r *http.Request, name string) {
+	name = strings.Trim(name, "/")
+	if name == "" {
+		writeError(w, r, http.StatusNotFound, "workflow name is required")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		_, raw, err := s.store.GetSteps(name)
+		if err != nil {
+			writeError(w, r, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, stepsResponse{Name: name, YAML: string(raw)})
+	case http.MethodPut:
+		body, err := readBody(r)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, err.Error())
+			return
+		}
+		var req validateRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			writeError(w, r, http.StatusBadRequest, "invalid json payload")
+			return
+		}
+		if strings.TrimSpace(req.YAML) == "" {
+			writeError(w, r, http.StatusBadRequest, "yaml is required")
+			return
+		}
+		if _, err := s.store.PutSteps(name, []byte(req.YAML)); err != nil {
+			writeError(w, r, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	default:
+		writeError(w, r, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
+func (s *Server) handleWorkflowInventory(w http.ResponseWriter, r *http.Request, name string) {
+	name = strings.Trim(name, "/")
+	if name == "" {
+		writeError(w, r, http.StatusNotFound, "workflow name is required")
+		return
+	}
+	if strings.TrimSpace(r.Header.Get("X-Workflow-Editor")) != "manual" {
+		writeError(w, r, http.StatusForbidden, "inventory access is restricted")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		_, raw, err := s.store.GetInventory(name)
+		if err != nil {
+			writeError(w, r, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, inventoryResponse{Name: name, YAML: string(raw)})
+	case http.MethodPut:
+		body, err := readBody(r)
+		if err != nil {
+			writeError(w, r, http.StatusBadRequest, err.Error())
+			return
+		}
+		var req validateRequest
+		if err := json.Unmarshal(body, &req); err != nil {
+			writeError(w, r, http.StatusBadRequest, "invalid json payload")
+			return
+		}
+		if strings.TrimSpace(req.YAML) == "" {
+			writeError(w, r, http.StatusBadRequest, "yaml is required")
+			return
+		}
+		if _, err := s.store.PutInventory(name, []byte(req.YAML)); err != nil {
+			writeError(w, r, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	default:
+		writeError(w, r, http.StatusMethodNotAllowed, "method not allowed")
+	}
+}
+
 
 func (s *Server) handleRuns(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"sync"
 
-	"bops/internal/workflow"
+	"bops/runner/workflow"
 	"gopkg.in/yaml.v3"
 )
 

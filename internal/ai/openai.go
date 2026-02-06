@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"bops/internal/logging"
+	"bops/runner/logging"
 	"go.uber.org/zap"
 )
 

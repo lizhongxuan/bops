@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"bops/internal/planner"
+	"bops/runner/planner"
 )
 
 type Decision string

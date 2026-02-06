@@ -1,14 +1,14 @@
 package server
 
 import (
-	"bops/internal/modules"
-	"bops/internal/modules/cmd"
-	"bops/internal/modules/envset"
-	"bops/internal/modules/pkg"
-	"bops/internal/modules/script"
-	"bops/internal/modules/service"
-	"bops/internal/modules/template"
-	"bops/internal/scriptstore"
+	"bops/runner/modules"
+	"bops/runner/modules/cmd"
+	"bops/runner/modules/envset"
+	"bops/runner/modules/pkg"
+	"bops/runner/modules/script"
+	"bops/runner/modules/service"
+	"bops/runner/modules/template"
+	"bops/runner/scriptstore"
 )
 
 func defaultRegistry(scriptStore *scriptstore.Store) *modules.Registry {

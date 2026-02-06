@@ -18,13 +18,13 @@ steps:
   - name: echo
     targets: [local]
     action: cmd.run
-    with:
+    args:
       cmd: "echo hello"
 
   - name: render file
     targets: [local]
     action: template.render
-    with:
+    args:
       src: examples/templates/hello.tmpl
       dest: /tmp/bops-hello.txt
       vars:

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"bops/internal/engine"
-	"bops/internal/workflow"
+	"bops/runner/engine"
+	"bops/runner/workflow"
 )
 
 func GenerateWorkflow(stepCount, hostCount int) workflow.Workflow {

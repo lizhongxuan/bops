@@ -7,7 +7,7 @@ import (
 
 	"bops/internal/validationenv"
 	"bops/internal/validationrun"
-	"bops/internal/workflow"
+	"bops/runner/workflow"
 )
 
 type validationEnvListResponse struct {

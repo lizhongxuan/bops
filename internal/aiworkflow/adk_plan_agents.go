@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	"bops/internal/logging"
+	"bops/runner/logging"
 	"github.com/cloudwego/eino/adk"
 	"github.com/cloudwego/eino/adk/prebuilt/planexecute"
 	"github.com/cloudwego/eino/schema"
