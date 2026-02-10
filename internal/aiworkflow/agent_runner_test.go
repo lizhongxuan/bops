@@ -25,7 +25,7 @@ func (f *agentRunnerClient) Chat(_ context.Context, _ []ai.Message) (string, err
 func TestRunAgentSetsAgentFields(t *testing.T) {
 	intentJSON := `{"intent_type":"debug","goal":"install nginx","missing":[]}`
 	planJSON := `[{"step_name":"install","description":"install nginx","dependencies":[]}]`
-	goodJSON := `{"workflow":{"version":"v0.1","name":"demo","description":"","inventory":{"hosts":{"local":{"address":"127.0.0.1"}}},"plan":{"mode":"manual-approve","strategy":"sequential"},"steps":[{"name":"install","action":"cmd.run","with":{"cmd":"echo hi"}}]}}`
+	goodJSON := `{"workflow":{"version":"v0.1","name":"demo","description":"","inventory":{"hosts":{"local":{"address":"127.0.0.1"}}},"plan":{"mode":"manual-approve","strategy":"sequential"},"steps":[{"name":"install","action":"cmd.run","args":{"cmd":"echo hi"}}]}}`
 	client := &agentRunnerClient{responses: []string{intentJSON, planJSON, goodJSON}}
 	pipeline, err := New(Config{Client: client, MaxRetries: 1})
 	if err != nil {

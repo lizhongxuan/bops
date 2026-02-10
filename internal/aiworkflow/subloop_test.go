@@ -17,8 +17,8 @@ func mustJSON(t *testing.T, payload any) string {
 }
 
 func TestSubLoopRetriesUntilReviewPasses(t *testing.T) {
-	fragment1 := "- name: install\n  action: cmd.run\n  with:\n    cmd: echo hi"
-	fragment2 := "- name: install\n  action: cmd.run\n  with:\n    cmd: echo ok"
+	fragment1 := "- name: install\n  action: cmd.run\n  args:\n    cmd: echo hi"
+	fragment2 := "- name: install\n  action: cmd.run\n  args:\n    cmd: echo ok"
 	responses := []string{
 		mustJSON(t, map[string]string{"yaml_fragment": fragment1}),
 		mustJSON(t, map[string][]string{"issues": {"missing guardrail"}}),
@@ -48,8 +48,8 @@ func TestSubLoopRetriesUntilReviewPasses(t *testing.T) {
 }
 
 func TestSubLoopReturnsIssuesAfterMaxRounds(t *testing.T) {
-	fragment1 := "- name: install\n  action: cmd.run\n  with:\n    cmd: echo hi"
-	fragment2 := "- name: install\n  action: cmd.run\n  with:\n    cmd: echo still"
+	fragment1 := "- name: install\n  action: cmd.run\n  args:\n    cmd: echo hi"
+	fragment2 := "- name: install\n  action: cmd.run\n  args:\n    cmd: echo still"
 	responses := []string{
 		mustJSON(t, map[string]string{"yaml_fragment": fragment1}),
 		mustJSON(t, map[string][]string{"issues": {"missing guardrail"}}),

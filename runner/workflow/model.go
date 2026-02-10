@@ -40,7 +40,6 @@ type Step struct {
 	Targets         []string       `json:"targets" yaml:"targets"`
 	Action          string         `json:"action" yaml:"action"`
 	Args            map[string]any `json:"args" yaml:"args"`
-	With            map[string]any `json:"with,omitempty" yaml:"with,omitempty"`
 	MustVars        []string       `json:"must_vars" yaml:"must_vars"`
 	When            string         `json:"when" yaml:"when"`
 	Loop            []any          `json:"loop" yaml:"loop"`
@@ -55,7 +54,6 @@ type Handler struct {
 	Name    string         `json:"name" yaml:"name"`
 	Action  string         `json:"action" yaml:"action"`
 	Args    map[string]any `json:"args" yaml:"args"`
-	With    map[string]any `json:"with,omitempty" yaml:"with,omitempty"`
 	When    string         `json:"when" yaml:"when"`
 	Retries int            `json:"retries" yaml:"retries"`
 	Timeout string         `json:"timeout" yaml:"timeout"`
@@ -65,5 +63,4 @@ type Test struct {
 	Name   string         `json:"name" yaml:"name"`
 	Action string         `json:"action" yaml:"action"`
 	Args   map[string]any `json:"args" yaml:"args"`
-	With   map[string]any `json:"with,omitempty" yaml:"with,omitempty"`
 }

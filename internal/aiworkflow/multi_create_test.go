@@ -28,8 +28,8 @@ func (c *fakeChatClient) Chat(_ context.Context, _ []ai.Message) (string, error)
 
 func TestRunMultiCreateEmitsStepPatchEvents(t *testing.T) {
 	planReply := `{"plan":[{"step_name":"install nginx","description":"install packages","dependencies":[]},{"step_name":"start nginx","description":"ensure service","dependencies":["install nginx"]}],"missing":[]}`
-	step1Reply := `{"tool":"step_patch","args":{"step_name":"install nginx","action":"pkg.install","targets":["local"],"with":{"name":"nginx"},"summary":"install nginx"}}`
-	step2Reply := `{"tool":"step_patch","args":{"step_name":"start nginx","action":"service.ensure","targets":["local"],"with":{"name":"nginx","state":"started"},"summary":"start nginx"}}`
+	step1Reply := `{"tool":"step_patch","args":{"step_name":"install nginx","action":"cmd.run","targets":["local"],"args":{"cmd":"apt-get install -y nginx"},"summary":"install nginx"}}`
+	step2Reply := `{"tool":"step_patch","args":{"step_name":"start nginx","action":"cmd.run","targets":["local"],"args":{"cmd":"systemctl start nginx"},"summary":"start nginx"}}`
 
 	client := &fakeChatClient{replies: []string{planReply, step1Reply, step2Reply}}
 	pipeline, err := New(Config{Client: client})
@@ -93,7 +93,7 @@ func TestRunMultiCreateEmitsStepPatchEvents(t *testing.T) {
 
 func TestRunMultiCreateQuestionsOnlyWhenAsked(t *testing.T) {
 	planReply := `{"plan":[],"missing":["inventory"]}`
-	stepReply := `{"tool":"step_patch","args":{"step_name":"install nginx","action":"pkg.install","targets":["local"],"with":{"name":"nginx"},"summary":"install nginx"}}`
+	stepReply := `{"tool":"step_patch","args":{"step_name":"install nginx","action":"cmd.run","targets":["local"],"args":{"cmd":"apt-get install -y nginx"},"summary":"install nginx"}}`
 
 	client := &fakeChatClient{replies: []string{planReply, stepReply}}
 	pipeline, err := New(Config{Client: client})

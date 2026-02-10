@@ -28,8 +28,8 @@ func (f *fakeClient) Chat(_ context.Context, _ []ai.Message) (string, error) {
 func TestPipelineGenerateFixExecute(t *testing.T) {
 	intentJSON := `{"goal":"install nginx","missing":[]}`
 	planJSON := `[{"step_name":"install","description":"install nginx","dependencies":[]}]`
-	badJSON := `{"workflow":{"version":"v0.1","name":"demo","steps":[{"name":"install","with":{"cmd":"echo hi"}}]}}`
-	goodJSON := `{"workflow":{"version":"v0.1","name":"demo","steps":[{"name":"install","action":"cmd.run","with":{"cmd":"echo hi"}}]}}`
+	badJSON := `{"workflow":{"version":"v0.1","name":"demo","steps":[{"name":"install","args":{"cmd":"echo hi"}}]}}`
+	goodJSON := `{"workflow":{"version":"v0.1","name":"demo","steps":[{"name":"install","action":"cmd.run","args":{"cmd":"echo hi"}}]}}`
 
 	client := &fakeClient{responses: []string{intentJSON, planJSON, badJSON, goodJSON}}
 	pipeline, err := New(Config{Client: client, MaxRetries: 1})

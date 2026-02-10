@@ -13,7 +13,7 @@ type SimulationStep struct {
 	Name    string         `json:"name"`
 	Action  string         `json:"action"`
 	Targets []string       `json:"targets,omitempty"`
-	With    map[string]any `json:"with,omitempty"`
+	Args    map[string]any `json:"args,omitempty"`
 	When    string         `json:"when,omitempty"`
 }
 
@@ -44,7 +44,7 @@ func RunSimulation(yamlText string, vars map[string]any) (*SimulationResult, err
 			Name:    strings.TrimSpace(step.Name),
 			Action:  strings.TrimSpace(step.Action),
 			Targets: append([]string{}, step.Targets...),
-			With:    step.With,
+			Args:    step.Args,
 			When:    strings.TrimSpace(step.When),
 		})
 	}

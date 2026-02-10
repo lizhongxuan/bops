@@ -52,7 +52,7 @@ func TestMultiAgentParallel(t *testing.T) {
 	client := &smartClient{
 		intentJSON:   `{"intent_type":"explain","goal":"install nginx","missing":[]}`,
 		planJSON:     `[{"step_name":"install","description":"install nginx","dependencies":[]}]`,
-		workflowJSON: `{"workflow":{"version":"v0.1","name":"demo","description":"","inventory":{"hosts":{"local":{"address":"127.0.0.1"}}},"plan":{"mode":"manual-approve","strategy":"sequential"},"steps":[{"name":"install","action":"cmd.run","with":{"cmd":"echo hi"}}]}}`,
+		workflowJSON: `{"workflow":{"version":"v0.1","name":"demo","description":"","inventory":{"hosts":{"local":{"address":"127.0.0.1"}}},"plan":{"mode":"manual-approve","strategy":"sequential"},"steps":[{"name":"install","action":"cmd.run","args":{"cmd":"echo hi"}}]}}`,
 	}
 	pipeline, err := New(Config{Client: client, MaxRetries: 1})
 	if err != nil {
@@ -80,8 +80,8 @@ func TestMultiAgentSummaryMerge(t *testing.T) {
 	client := &smartClient{
 		intentJSON:   `{"intent_type":"explain","goal":"install nginx","missing":[]}`,
 		planJSON:     `[{"step_name":"install","description":"install nginx","dependencies":[]}]`,
-		workflowJSON: `{"workflow":{"version":"v0.1","name":"demo","description":"","inventory":{"hosts":{"local":{"address":"127.0.0.1"}}},"plan":{"mode":"manual-approve","strategy":"sequential"},"steps":[{"name":"install","action":"cmd.run","with":{"cmd":"echo hi"}}]}}`,
-		fixJSON:      `{"workflow":{"version":"v0.1","name":"demo","description":"","inventory":{"hosts":{"local":{"address":"127.0.0.1"}}},"plan":{"mode":"manual-approve","strategy":"sequential"},"steps":[{"name":"install","action":"cmd.run","with":{"cmd":"echo fixed"}}]}}`,
+		workflowJSON: `{"workflow":{"version":"v0.1","name":"demo","description":"","inventory":{"hosts":{"local":{"address":"127.0.0.1"}}},"plan":{"mode":"manual-approve","strategy":"sequential"},"steps":[{"name":"install","action":"cmd.run","args":{"cmd":"echo hi"}}]}}`,
+		fixJSON:      `{"workflow":{"version":"v0.1","name":"demo","description":"","inventory":{"hosts":{"local":{"address":"127.0.0.1"}}},"plan":{"mode":"manual-approve","strategy":"sequential"},"steps":[{"name":"install","action":"cmd.run","args":{"cmd":"echo fixed"}}]}}`,
 		reviewReplies: []string{
 			`{"issues":["missing step description"]}`,
 			`{"issues":[]}`,

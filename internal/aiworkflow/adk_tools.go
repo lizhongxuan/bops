@@ -47,7 +47,7 @@ func (t *stepPatchTool) Info(_ context.Context) (*schema.ToolInfo, error) {
 				ElemInfo: &schema.ParameterInfo{Type: schema.String},
 				Desc:     "Target hosts or groups",
 			},
-			"with": {
+			"args": {
 				Type: schema.Object,
 				Desc: "Action parameters",
 			},

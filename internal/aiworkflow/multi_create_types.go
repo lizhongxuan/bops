@@ -9,7 +9,7 @@ type StepPatch struct {
 	StepName string         `json:"step_name"`
 	Action   string         `json:"action"`
 	Targets  []string       `json:"targets,omitempty"`
-	With     map[string]any `json:"with,omitempty"`
+	Args     map[string]any `json:"args,omitempty"`
 	Summary  string         `json:"summary,omitempty"`
 	Source   string         `json:"source,omitempty"` // "coder" | "reviewer"
 }

@@ -232,7 +232,7 @@ func buildCoderToolPrompt(step PlanStep, contextText string) string {
 	builder := strings.Builder{}
 	builder.WriteString("You are a workflow coder. Use the tool step_patch to submit a single step.\n")
 	builder.WriteString("Respond with JSON only in this envelope:\n")
-	builder.WriteString("{\"tool\":\"step_patch\",\"args\":{\"step_id\":\"...\",\"step_name\":\"...\",\"action\":\"...\",\"targets\":[],\"with\":{},\"summary\":\"...\"}}\n")
+	builder.WriteString("{\"tool\":\"step_patch\",\"args\":{\"step_id\":\"...\",\"step_name\":\"...\",\"action\":\"...\",\"targets\":[],\"args\":{},\"summary\":\"...\"}}\n")
 	builder.WriteString("Allowed actions: ")
 	builder.WriteString(allowedActionText())
 	builder.WriteString(".\n")

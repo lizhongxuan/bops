@@ -26,8 +26,8 @@ func TestWorkflowValidate_PlanAndDuplicates(t *testing.T) {
 			Strategy: "parallel",
 		},
 		Handlers: []Handler{
-			{Name: "restart", Action: "service.restart"},
-			{Name: "restart", Action: "service.restart"},
+			{Name: "restart", Action: "cmd.run"},
+			{Name: "restart", Action: "cmd.run"},
 		},
 		Steps: []Step{
 			{

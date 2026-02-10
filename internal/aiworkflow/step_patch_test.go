@@ -3,7 +3,7 @@ package aiworkflow
 import "testing"
 
 func TestParseStepPatchJSONValid(t *testing.T) {
-	reply := `{"step_name":"install nginx","action":"cmd.run","with":{"cmd":"echo hi"}}`
+	reply := `{"step_name":"install nginx","action":"cmd.run","args":{"cmd":"echo hi"}}`
 	patch, err := parseStepPatchJSON(reply)
 	if err != nil {
 		t.Fatalf("expected no error, got %v", err)

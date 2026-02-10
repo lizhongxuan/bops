@@ -37,8 +37,8 @@ func normalizeStepPatch(patch StepPatch) (StepPatch, error) {
 	if !isAllowedAction(patch.Action) {
 		return StepPatch{}, fmt.Errorf("action %q is not allowed", patch.Action)
 	}
-	if patch.With == nil {
-		patch.With = map[string]any{}
+	if patch.Args == nil {
+		patch.Args = map[string]any{}
 	}
 	if patch.Summary == "" {
 		patch.Summary = patch.StepName

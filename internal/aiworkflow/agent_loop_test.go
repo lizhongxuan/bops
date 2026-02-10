@@ -25,7 +25,7 @@ func (f *loopClient) Chat(_ context.Context, _ []ai.Message) (string, error) {
 
 func TestAgentLoopToolCallFinal(t *testing.T) {
 	toolCall := `{"action":"tool_call","tool":"search_file","args":{"pattern":"config/*.json"}}`
-	final := `{"action":"final","yaml":"version: v0.1\nname: demo\ndescription: ''\ninventory:\n  hosts:\n    local:\n      address: 127.0.0.1\nplan:\n  mode: manual-approve\n  strategy: sequential\nsteps:\n  - name: step1\n    action: cmd.run\n    with:\n      cmd: \"echo hi\"\n"}`
+	final := `{"action":"final","yaml":"version: v0.1\nname: demo\ndescription: ''\ninventory:\n  hosts:\n    local:\n      address: 127.0.0.1\nplan:\n  mode: manual-approve\n  strategy: sequential\nsteps:\n  - name: step1\n    action: cmd.run\n    args:\n      cmd: \"echo hi\"\n"}`
 	client := &loopClient{responses: []string{toolCall, final}}
 	pipeline, err := New(Config{Client: client, MaxRetries: 1})
 	if err != nil {
@@ -86,7 +86,7 @@ func TestAgentLoopMaxIters(t *testing.T) {
 func TestAgentLoopFallbackToPipeline(t *testing.T) {
 	invalid := `{"action":"tool_call"}`
 	intentJSON := `{"goal":"install nginx","missing":[]}`
-	workflowJSON := `{"workflow":{"version":"v0.1","name":"demo","steps":[{"name":"install","action":"cmd.run","with":{"cmd":"echo hi"}}]}}`
+	workflowJSON := `{"workflow":{"version":"v0.1","name":"demo","steps":[{"name":"install","action":"cmd.run","args":{"cmd":"echo hi"}}]}}`
 	client := &loopClient{responses: []string{invalid, invalid, intentJSON, workflowJSON}}
 	pipeline, err := New(Config{Client: client, MaxRetries: 1})
 	if err != nil {

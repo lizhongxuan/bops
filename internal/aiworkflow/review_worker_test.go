@@ -17,7 +17,7 @@ func TestReviewWorkerUpdatesStore(t *testing.T) {
 			StepID:   "step-1",
 			StepName: "install nginx",
 			Action:   "cmd.run",
-			With:     map[string]any{"cmd": "echo hi"},
+			Args:     map[string]any{"cmd": "echo hi"},
 			Summary:  "install nginx",
 		},
 		Attempt: 0,

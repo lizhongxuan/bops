@@ -6,7 +6,7 @@ import (
 )
 
 func TestExtractWorkflowYAMLFromJSON(t *testing.T) {
-	jsonReply := `{"workflow":{"version":"v0.1","name":"demo","steps":[{"name":"step","action":"cmd.run","targets":["local"],"with":{"cmd":"echo hi"}}]},"questions":["Which hosts?"]}`
+	jsonReply := `{"workflow":{"version":"v0.1","name":"demo","steps":[{"name":"step","action":"cmd.run","targets":["local"],"args":{"cmd":"echo hi"}}]},"questions":["Which hosts?"]}`
 
 	yamlText, questions, err := extractWorkflowYAML(jsonReply)
 	if err != nil {

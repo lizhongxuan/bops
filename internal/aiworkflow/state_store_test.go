@@ -18,7 +18,7 @@ plan:
 steps:
   - name: stepA
     action: cmd.run
-    with:
+    args:
       cmd: echo a
 `
 	fragment := `version: v0.1
@@ -34,7 +34,7 @@ plan:
 steps:
   - name: stepB
     action: cmd.run
-    with:
+    args:
       cmd: echo b
 `
 	store := NewStateStore(base)

@@ -51,7 +51,7 @@ func TestRunAPI_StatusPayload(t *testing.T) {
 				Targets: []string{
 					"web",
 				},
-				With: map[string]any{
+				Args: map[string]any{
 					"cmd": "echo hi",
 				},
 			},

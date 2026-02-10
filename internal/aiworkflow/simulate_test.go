@@ -17,11 +17,11 @@ plan:
 steps:
   - name: step-one
     action: cmd.run
-    with:
+    args:
       cmd: echo hello
   - name: step-two
     action: cmd.run
-    with:
+    args:
       cmd: echo world
 `
 	result, err := RunSimulation(yamlText, map[string]any{"env": "test"})

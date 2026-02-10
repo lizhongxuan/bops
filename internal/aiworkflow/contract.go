@@ -21,9 +21,7 @@ const (
 
 var allowedActionList = []string{
 	"cmd.run",
-	"pkg.install",
 	"template.render",
-	"service.ensure",
 	"script.shell",
 	"script.python",
 	"env.set",

@@ -40,11 +40,11 @@ steps:
       env:
         TOKEN: "abc"
 
-  - name: install package
+  - name: run check
     targets: [web]
-    action: pkg.install
+    action: cmd.run
     args:
-      name: nginx
+      cmd: "echo check"
 
   - name: render template
     targets: [web]
@@ -53,12 +53,11 @@ steps:
       src: nginx.conf.j2
       dest: /etc/nginx/nginx.conf
 
-  - name: ensure service
+  - name: run finish
     targets: [web]
-    action: service.ensure
+    action: cmd.run
     args:
-      name: nginx
-      state: started
+      cmd: "echo done"
 `
 
 func TestLoadMapping(t *testing.T) {
@@ -89,8 +88,8 @@ func TestLoadMapping(t *testing.T) {
 		t.Fatalf("step2 env token mismatch: %v", env["TOKEN"])
 	}
 
-	if got := wf.Steps[3].Args["name"]; got != "nginx" {
-		t.Fatalf("step3 name mismatch: %v", got)
+	if got := wf.Steps[3].Args["cmd"]; got != "echo check" {
+		t.Fatalf("step3 cmd mismatch: %v", got)
 	}
 	if got := wf.Steps[4].Args["src"]; got != "nginx.conf.j2" {
 		t.Fatalf("step4 src mismatch: %v", got)
@@ -98,7 +97,7 @@ func TestLoadMapping(t *testing.T) {
 	if got := wf.Steps[4].Args["dest"]; got != "/etc/nginx/nginx.conf" {
 		t.Fatalf("step4 dest mismatch: %v", got)
 	}
-	if got := wf.Steps[5].Args["state"]; got != "started" {
-		t.Fatalf("step5 state mismatch: %v", got)
+	if got := wf.Steps[5].Args["cmd"]; got != "echo done" {
+		t.Fatalf("step5 cmd mismatch: %v", got)
 	}
 }

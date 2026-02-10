@@ -137,7 +137,7 @@ func newTestServer(t *testing.T) *Server {
 func TestAIWorkflowGenerate(t *testing.T) {
 	srv := newTestServer(t)
 	planJSON := `{"plan":[{"step_name":"install nginx","description":"install packages","dependencies":[]}],"missing":[]}`
-	stepJSON := `{"tool":"step_patch","args":{"step_name":"install nginx","action":"pkg.install","targets":["local"],"with":{"name":"nginx"},"summary":"install nginx"}}`
+	stepJSON := `{"tool":"step_patch","args":{"step_name":"install nginx","action":"cmd.run","targets":["local"],"args":{"cmd":"echo install nginx"},"summary":"install nginx"}}`
 	stub := &stubSequence{responses: []string{planJSON, stepJSON}}
 	srv.aiClient = stub
 	workflow, err := aiworkflow.New(aiworkflow.Config{
@@ -353,7 +353,7 @@ func TestBuildStreamMessageFromEvent(t *testing.T) {
 func TestAIWorkflowStreamSSEOrder(t *testing.T) {
 	srv := newTestServer(t)
 	planJSON := `{"plan":[{"step_name":"install nginx","description":"install packages","dependencies":[]}],"missing":[]}`
-	stepJSON := `{"tool":"step_patch","args":{"step_name":"install nginx","action":"pkg.install","targets":["local"],"with":{"name":"nginx"},"summary":"install nginx"}}`
+	stepJSON := `{"tool":"step_patch","args":{"step_name":"install nginx","action":"cmd.run","targets":["local"],"args":{"cmd":"echo install nginx"},"summary":"install nginx"}}`
 	streamClient := &streamSequence{
 		responses: []string{planJSON, stepJSON},
 		thought:   "thinking...",

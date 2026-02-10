@@ -29,7 +29,7 @@ func ConvertScriptToYAML(scriptText string) (string, error) {
 			{
 				Name:   "run-script",
 				Action: "cmd.run",
-				With: map[string]any{
+				Args: map[string]any{
 					"cmd": trimmed,
 				},
 			},

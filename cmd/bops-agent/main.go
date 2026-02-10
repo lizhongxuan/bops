@@ -19,7 +19,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	ag := agent.New(*id, []string{"cmd.run", "pkg.install", "template.render", "service.ensure", "service.restart"})
+	ag := agent.New(*id, []string{"cmd.run", "shell.run", "script.shell", "script.python", "env.set", "template.render", "wait.event"})
 	ag.Start()
 	printInfo(ag.Info())
 

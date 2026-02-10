@@ -26,7 +26,7 @@ func TestConvertScriptToYAML(t *testing.T) {
 	if wf.Steps[0].Action != "cmd.run" {
 		t.Fatalf("unexpected action: %s", wf.Steps[0].Action)
 	}
-	if cmd, ok := wf.Steps[0].With["cmd"].(string); !ok || strings.TrimSpace(cmd) != script {
-		t.Fatalf("unexpected cmd: %v", wf.Steps[0].With["cmd"])
+	if cmd, ok := wf.Steps[0].Args["cmd"].(string); !ok || strings.TrimSpace(cmd) != script {
+		t.Fatalf("unexpected cmd: %v", wf.Steps[0].Args["cmd"])
 	}
 }

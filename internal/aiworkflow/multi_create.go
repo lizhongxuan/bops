@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"bops/internal/ai"
-	"bops/runner/logging"
 	"bops/internal/validationrun"
+	"bops/runner/logging"
 	"bops/runner/workflow"
 	"go.uber.org/zap"
 )
@@ -344,7 +344,7 @@ func (p *Pipeline) runCoderStep(ctx context.Context, step PlanStep, state *State
 func buildCoderPrompt(step PlanStep, contextText string) string {
 	builder := strings.Builder{}
 	builder.WriteString("You are a workflow coder. Return JSON only.\n")
-	builder.WriteString("Output format: {\"step_id\":\"...\",\"step_name\":\"...\",\"action\":\"...\",\"targets\":[],\"with\":{},\"summary\":\"...\"}\n")
+	builder.WriteString("Output format: {\"step_id\":\"...\",\"step_name\":\"...\",\"action\":\"...\",\"targets\":[],\"args\":{},\"summary\":\"...\"}\n")
 	builder.WriteString("Allowed actions: ")
 	builder.WriteString(allowedActionText())
 	builder.WriteString(".\n")
@@ -500,7 +500,7 @@ func (p *Pipeline) runReviewerFix(ctx context.Context, patch StepPatch, issues [
 func buildReviewerPrompt(patch StepPatch, issues []string, execError string) string {
 	builder := strings.Builder{}
 	builder.WriteString("You are a workflow reviewer. Fix the step JSON and return JSON only.\n")
-	builder.WriteString("Output format: {\"step_id\":\"...\",\"step_name\":\"...\",\"action\":\"...\",\"targets\":[],\"with\":{},\"summary\":\"...\"}\n")
+	builder.WriteString("Output format: {\"step_id\":\"...\",\"step_name\":\"...\",\"action\":\"...\",\"targets\":[],\"args\":{},\"summary\":\"...\"}\n")
 	builder.WriteString("Allowed actions: ")
 	builder.WriteString(allowedActionText())
 	builder.WriteString(".\n\n")
@@ -530,7 +530,7 @@ func (p *Pipeline) runStepValidation(ctx context.Context, patch StepPatch, opts 
 		Name:    patch.StepName,
 		Targets: patch.Targets,
 		Action:  patch.Action,
-		With:    patch.With,
+		Args:    patch.Args,
 	}
 	wf := normalizeWorkflow(workflow.Workflow{Steps: []workflow.Step{step}})
 	yamlText, err := marshalWorkflowYAML(wf)
@@ -565,7 +565,7 @@ func buildFinalYAML(snapshot DraftState) (string, error) {
 			Name:    patch.StepName,
 			Targets: patch.Targets,
 			Action:  patch.Action,
-			With:    patch.With,
+			Args:    patch.Args,
 		})
 	}
 	wf := normalizeWorkflow(workflow.Workflow{Steps: steps})

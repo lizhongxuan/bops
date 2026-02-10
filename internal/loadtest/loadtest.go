@@ -22,7 +22,7 @@ func GenerateWorkflow(stepCount, hostCount int) workflow.Workflow {
 			Name:    fmt.Sprintf("step-%d", i),
 			Targets: []string{},
 			Action:  "cmd.run",
-			With: map[string]any{
+			Args: map[string]any{
 				"cmd": "echo loadtest",
 			},
 		})
