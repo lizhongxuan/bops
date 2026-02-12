@@ -29,3 +29,42 @@ func recorderFromContext(ctx context.Context) Recorder {
 	recorder, _ := ctx.Value(recorderKey{}).(Recorder)
 	return recorder
 }
+
+type multiRecorder struct {
+	recorders []Recorder
+}
+
+func MultiRecorder(recorders ...Recorder) Recorder {
+	filtered := make([]Recorder, 0, len(recorders))
+	for _, recorder := range recorders {
+		if recorder == nil {
+			continue
+		}
+		filtered = append(filtered, recorder)
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	if len(filtered) == 1 {
+		return filtered[0]
+	}
+	return &multiRecorder{recorders: filtered}
+}
+
+func (r *multiRecorder) StepStart(step workflow.Step, targets []workflow.HostSpec) {
+	for _, recorder := range r.recorders {
+		recorder.StepStart(step, targets)
+	}
+}
+
+func (r *multiRecorder) StepFinish(step workflow.Step, status string) {
+	for _, recorder := range r.recorders {
+		recorder.StepFinish(step, status)
+	}
+}
+
+func (r *multiRecorder) HostResult(step workflow.Step, host workflow.HostSpec, result scheduler.Result) {
+	for _, recorder := range r.recorders {
+		recorder.HostResult(step, host, result)
+	}
+}

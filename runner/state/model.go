@@ -14,28 +14,34 @@ type ResourceState struct {
 type HostResult struct {
 	Host       string         `json:"host"`
 	Status     string         `json:"status"`
-	StartedAt  time.Time      `json:"started_at"`
-	FinishedAt time.Time      `json:"finished_at"`
-	Message    string         `json:"message"`
-	Output     map[string]any `json:"output"`
+	StartedAt  time.Time      `json:"started_at,omitempty"`
+	FinishedAt time.Time      `json:"finished_at,omitempty"`
+	Message    string         `json:"message,omitempty"`
+	Output     map[string]any `json:"output,omitempty"`
 }
 
 type StepState struct {
 	Name       string                `json:"name"`
 	Status     string                `json:"status"`
-	StartedAt  time.Time             `json:"started_at"`
-	FinishedAt time.Time             `json:"finished_at"`
-	Hosts      map[string]HostResult `json:"hosts"`
+	StartedAt  time.Time             `json:"started_at,omitempty"`
+	FinishedAt time.Time             `json:"finished_at,omitempty"`
+	Message    string                `json:"message,omitempty"`
+	Hosts      map[string]HostResult `json:"hosts,omitempty"`
 }
 
 type RunState struct {
-	RunID           string                   `json:"run_id"`
-	WorkflowName    string                   `json:"workflow_name"`
-	WorkflowVersion string                   `json:"workflow_version"`
-	Status          string                   `json:"status"`
-	Message         string                   `json:"message,omitempty"`
-	StartedAt       time.Time                `json:"started_at"`
-	FinishedAt      time.Time                `json:"finished_at"`
-	Steps           []StepState              `json:"steps"`
-	Resources       map[string]ResourceState `json:"resources"`
+	RunID             string                   `json:"run_id"`
+	WorkflowName      string                   `json:"workflow_name"`
+	WorkflowVersion   string                   `json:"workflow_version,omitempty"`
+	Status            string                   `json:"status"`
+	Message           string                   `json:"message,omitempty"`
+	LastError         string                   `json:"last_error,omitempty"`
+	InterruptedReason string                   `json:"interrupted_reason,omitempty"`
+	LastNotifyError   string                   `json:"last_notify_error,omitempty"`
+	Version           int64                    `json:"version"`
+	StartedAt         time.Time                `json:"started_at,omitempty"`
+	FinishedAt        time.Time                `json:"finished_at,omitempty"`
+	UpdatedAt         time.Time                `json:"updated_at,omitempty"`
+	Steps             []StepState              `json:"steps,omitempty"`
+	Resources         map[string]ResourceState `json:"resources,omitempty"`
 }

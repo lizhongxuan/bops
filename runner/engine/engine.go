@@ -14,21 +14,28 @@ import (
 	"bops/runner/modules"
 	"bops/runner/planner"
 	"bops/runner/scheduler"
+	"bops/runner/state"
 	"bops/runner/workflow"
 	"go.uber.org/zap"
 )
 
 type Engine struct {
-	Registry   *modules.Registry
-	Dispatcher scheduler.Dispatcher
-	Verbose    bool
-	Out        io.Writer
+	Registry         *modules.Registry
+	Dispatcher       scheduler.Dispatcher
+	RunStore         state.RunStateStore
+	Notifier         state.RunStateNotifier
+	NotifyRetry      int
+	NotifyDelay      time.Duration
+	Verbose          bool
+	Out              io.Writer
+	fallbackWarnOnce sync.Once
 }
 
 func New(registry *modules.Registry) *Engine {
 	return &Engine{
 		Registry:   registry,
 		Dispatcher: scheduler.NewLocalDispatcher(registry),
+		RunStore:   state.NewInMemoryRunStore(),
 	}
 }
 
@@ -126,11 +133,58 @@ func (e *Engine) Plan(ctx context.Context, wf workflow.Workflow) (planner.Plan, 
 }
 
 func (e *Engine) Apply(ctx context.Context, wf workflow.Workflow) error {
+	_, err := e.ApplyWithRun(ctx, wf, RunOptions{})
+	return err
+}
+
+func (e *Engine) ApplyWithRun(ctx context.Context, wf workflow.Workflow, opts RunOptions) (state.RunState, error) {
 	logging.L().Debug("engine apply start",
 		zap.String("workflow", wf.Name),
 		zap.Int("steps", len(wf.Steps)),
 	)
-	recorder := recorderFromContext(ctx)
+	store := opts.Store
+	if store == nil {
+		store = e.RunStore
+	}
+	if store == nil {
+		store = state.NewInMemoryRunStore()
+	}
+	if isInMemoryStore(store) {
+		e.fallbackWarnOnce.Do(func() {
+			logging.L().Warn("run state store is in-memory only (non-durable); inject a durable RunStateStore for production")
+		})
+	}
+	notifier := opts.Notifier
+	if notifier == nil {
+		notifier = e.Notifier
+	}
+	if opts.NotifyRetry == 0 {
+		opts.NotifyRetry = e.NotifyRetry
+	}
+	if opts.NotifyDelay <= 0 {
+		if e.NotifyDelay > 0 {
+			opts.NotifyDelay = e.NotifyDelay
+		} else {
+			opts.NotifyDelay = 300 * time.Millisecond
+		}
+	}
+
+	tracker, err := newRunTracker(wf, RunOptions{
+		RunID:       opts.RunID,
+		Store:       store,
+		Notifier:    notifier,
+		NotifyRetry: opts.NotifyRetry,
+		NotifyDelay: opts.NotifyDelay,
+	}, store)
+	if err != nil {
+		return state.RunState{}, err
+	}
+	if err := tracker.Start(ctx); err != nil {
+		return state.RunState{}, err
+	}
+
+	baseRecorder := recorderFromContext(ctx)
+	recorder := MultiRecorder(baseRecorder, tracker)
 	env := envFromContext(ctx)
 	runner := &dispatchRunner{
 		dispatcher: e.Dispatcher,
@@ -138,18 +192,65 @@ func (e *Engine) Apply(ctx context.Context, wf workflow.Workflow) error {
 		out:        e.Out,
 		recorder:   recorder,
 		env:        env,
+		runID:      tracker.RunID(),
 	}
 	exec := &executor.Executor{
 		Runner:   runner,
 		Observer: recorder,
 	}
-	err := exec.Run(ctx, wf)
+	err = exec.Run(ctx, wf)
 	if err != nil {
-		logging.L().Debug("engine apply failed", zap.String("workflow", wf.Name), zap.Error(err))
-		return err
+		status := state.RunStatusFailed
+		if ctx.Err() != nil {
+			status = state.RunStatusCanceled
+		}
+		if finishErr := tracker.Finish(ctx, status, err.Error(), err); finishErr != nil {
+			return tracker.Snapshot(), fmt.Errorf("finalize run status: %w (execution error: %v)", finishErr, err)
+		}
+		logging.L().Debug("engine apply failed",
+			zap.String("workflow", wf.Name),
+			zap.String("run_id", tracker.RunID()),
+			zap.Error(err),
+		)
+		return tracker.Snapshot(), err
 	}
-	logging.L().Debug("engine apply done", zap.String("workflow", wf.Name))
-	return nil
+	if finishErr := tracker.Finish(ctx, state.RunStatusSuccess, "", nil); finishErr != nil {
+		return tracker.Snapshot(), finishErr
+	}
+	logging.L().Debug("engine apply done",
+		zap.String("workflow", wf.Name),
+		zap.String("run_id", tracker.RunID()),
+	)
+	return tracker.Snapshot(), nil
+}
+
+func (e *Engine) ReconcileRunning(ctx context.Context, store state.RunStateStore, reason string) (int, error) {
+	targetStore := store
+	if targetStore == nil {
+		targetStore = e.RunStore
+	}
+	if targetStore == nil {
+		return 0, nil
+	}
+	updated, err := targetStore.MarkInterruptedRunning(ctx, reason)
+	if err != nil {
+		return 0, err
+	}
+	if updated > 0 {
+		logging.L().Info("reconciled interrupted runs",
+			zap.Int("count", updated),
+			zap.String("reason", reason),
+		)
+	}
+	return updated, nil
+}
+
+func isInMemoryStore(store state.RunStateStore) bool {
+	if store == nil {
+		return true
+	}
+	_, ok := store.(*state.InMemoryRunStore)
+	return ok
 }
 
 type dispatchRunner struct {
@@ -159,6 +260,7 @@ type dispatchRunner struct {
 	recorder   Recorder
 	mu         sync.Mutex
 	env        map[string]string
+	runID      string
 }
 
 func (r *dispatchRunner) Run(ctx context.Context, step workflow.Step, host workflow.HostSpec, vars map[string]any) (executor.RunResult, error) {
@@ -166,16 +268,22 @@ func (r *dispatchRunner) Run(ctx context.Context, step workflow.Step, host workf
 		return executor.RunResult{}, fmt.Errorf("dispatcher is nil")
 	}
 	logging.L().Debug("dispatch run",
+		zap.String("run_id", r.runID),
 		zap.String("step", step.Name),
 		zap.String("action", step.Action),
 		zap.String("host", host.Name),
 	)
 	taskVars := r.injectEnv(vars)
+	taskID := fmt.Sprintf("task-%s-%s-%d", step.Name, host.Name, time.Now().UTC().UnixNano())
+	if strings.TrimSpace(r.runID) != "" {
+		taskID = fmt.Sprintf("%s-%s", r.runID, taskID)
+	}
 	result, err := r.dispatcher.Dispatch(ctx, scheduler.Task{
-		ID:   fmt.Sprintf("task-%s-%s-%d", step.Name, host.Name, time.Now().UTC().UnixNano()),
-		Step: step,
-		Host: host,
-		Vars: taskVars,
+		ID:    taskID,
+		RunID: r.runID,
+		Step:  step,
+		Host:  host,
+		Vars:  taskVars,
 	})
 	if r.verbose {
 		r.printResult(step, host, result)
@@ -188,6 +296,7 @@ func (r *dispatchRunner) Run(ctx context.Context, step workflow.Step, host workf
 	}
 	if err != nil {
 		logging.L().Debug("dispatch failed",
+			zap.String("run_id", r.runID),
 			zap.String("step", step.Name),
 			zap.String("host", host.Name),
 			zap.Error(err),
@@ -196,6 +305,7 @@ func (r *dispatchRunner) Run(ctx context.Context, step workflow.Step, host workf
 	}
 	if result.Status != "success" {
 		logging.L().Debug("dispatch result not success",
+			zap.String("run_id", r.runID),
 			zap.String("step", step.Name),
 			zap.String("host", host.Name),
 			zap.String("status", result.Status),
@@ -203,6 +313,7 @@ func (r *dispatchRunner) Run(ctx context.Context, step workflow.Step, host workf
 		return executor.RunResult{Output: result.Output}, fmt.Errorf("task failed: %s", result.Error)
 	}
 	logging.L().Debug("dispatch done",
+		zap.String("run_id", r.runID),
 		zap.String("step", step.Name),
 		zap.String("host", host.Name),
 	)

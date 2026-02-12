@@ -275,3 +275,52 @@ steps:
 ```
 
 > 该方案的限制是：如果进程被强杀/runner 崩溃，上报 step 仍可能执行不到，因此推荐后续补 `finally` 原生字段。
+
+## 10. Runner 运行状态接口（非 YAML 字段）
+
+除了 YAML 编排字段，Runner 还支持按 `run_id` 的运行状态持久化与查询，方便长任务追踪与重启后排障。
+
+### 10.1 `RunStateStore`（可插拔）
+
+Runner 核心只依赖接口，不直接绑定数据库。业务程序可注入自己的存储实现：
+
+- `CreateRun(ctx, run)`
+- `UpdateRun(ctx, run)`
+- `GetRun(ctx, runID)`
+- `ListRuns(ctx, filter)`
+- `MarkInterruptedRunning(ctx, reason)`
+
+默认实现：
+
+- `state.NewInMemoryRunStore()`：仅进程内可见，重启后丢失。
+- `state.NewFileStore(path)`：文件持久化，适合单机示例。
+
+### 10.2 生命周期状态机
+
+合法迁移：
+
+`queued -> running -> success/failed/canceled/interrupted`
+
+终态不能回退到 `running`，非法状态迁移会被拒绝。
+
+### 10.3 回调字段契约
+
+状态回调统一 payload 字段：
+
+- `run_id`
+- `workflow_name`
+- `status`
+- `step`
+- `host`
+- `timestamp`
+- `error`
+- `version`
+
+回调是异步 best-effort：回调失败不会改变运行结果状态，但会记录 `last_notify_error`。
+
+### 10.4 示例查询接口
+
+- `runner/examples/web-ui`：`GET /run-status?run_id=<id>`
+- `runner/examples/agent-server`：`GET /run-status?run_id=<id>`
+
+未知 `run_id` 返回 404（not found）。

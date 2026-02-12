@@ -11,10 +11,11 @@ import (
 )
 
 type Task struct {
-	ID   string
-	Step workflow.Step
-	Host workflow.HostSpec
-	Vars map[string]any
+	ID    string
+	RunID string
+	Step  workflow.Step
+	Host  workflow.HostSpec
+	Vars  map[string]any
 }
 
 type Result struct {
@@ -42,6 +43,7 @@ func (d *LocalDispatcher) Dispatch(ctx context.Context, task Task) (Result, erro
 	}
 	logging.L().Debug("dispatch task",
 		zap.String("task_id", task.ID),
+		zap.String("run_id", task.RunID),
 		zap.String("step", task.Step.Name),
 		zap.String("action", task.Step.Action),
 		zap.String("host", task.Host.Name),
@@ -59,6 +61,7 @@ func (d *LocalDispatcher) Dispatch(ctx context.Context, task Task) (Result, erro
 	if err != nil {
 		logging.L().Debug("dispatch task failed",
 			zap.String("task_id", task.ID),
+			zap.String("run_id", task.RunID),
 			zap.Error(err),
 		)
 		return Result{

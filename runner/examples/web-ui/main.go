@@ -13,6 +13,7 @@ import (
 	"bops/runner/engine"
 	"bops/runner/logging"
 	"bops/runner/scheduler"
+	"bops/runner/state"
 	"bops/runner/workflow"
 	"go.uber.org/zap"
 )
@@ -102,13 +103,15 @@ func newRunHub() *runHub {
 	return &runHub{runs: map[string]chan logEvent{}}
 }
 
-func (h *runHub) create() (string, chan logEvent) {
+func (h *runHub) create(runID string) chan logEvent {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	runID := fmt.Sprintf("run-%d", time.Now().UTC().UnixNano())
+	if strings.TrimSpace(runID) == "" {
+		runID = state.NewRunID()
+	}
 	ch := make(chan logEvent, 64)
 	h.runs[runID] = ch
-	return runID, ch
+	return ch
 }
 
 func (h *runHub) get(runID string) (chan logEvent, bool) {
@@ -127,6 +130,7 @@ func (h *runHub) remove(runID string) {
 func main() {
 	_, _ = logging.Init(logging.Config{LogLevel: "info", LogFormat: "console"})
 	hub := newRunHub()
+	runStore := state.NewInMemoryRunStore()
 
 	http.Handle("/", http.FileServer(http.FS(staticFS)))
 
@@ -171,13 +175,15 @@ func main() {
 			}
 		}
 
-		runID, ch := hub.create()
+		runID := state.NewRunID()
+		ch := hub.create(runID)
 		total := len(wf.Steps)
 
 		go func() {
 			defer close(ch)
 			reg := engine.DefaultRegistry(nil)
 			eng := engine.New(reg)
+			eng.RunStore = runStore
 
 			mode := strings.ToLower(strings.TrimSpace(req.Mode))
 			if mode == "agent" || mode == "" {
@@ -210,16 +216,22 @@ func main() {
 			rec := &streamRecorder{ch: ch, stepIndex: stepIndex, total: total}
 			ctx := engine.WithRecorder(context.Background(), rec)
 			ch <- logEvent{Type: "run_start", StepTotal: total}
-			if err := eng.Apply(ctx, wf); err != nil {
+			runSnapshot, err := eng.ApplyWithRun(ctx, wf, engine.RunOptions{
+				RunID: runID,
+				Store: runStore,
+			})
+			if err != nil {
 				ch <- logEvent{Type: "error", Message: err.Error()}
 				return
 			}
-			ch <- logEvent{Type: "done"}
+			ch <- logEvent{Type: "done", Status: runSnapshot.Status}
 		}()
 
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(startResponse{RunID: runID})
 	})
+
+	http.HandleFunc("/run-status", runStatusHandler(runStore))
 
 	http.HandleFunc("/stream", func(w http.ResponseWriter, r *http.Request) {
 		runID := strings.TrimSpace(r.URL.Query().Get("run_id"))
@@ -253,5 +265,33 @@ func main() {
 	logging.L().Info("runner web ui listening", zap.String("addr", addr))
 	if err := http.ListenAndServe(addr, nil); err != nil {
 		logging.L().Error("web ui server failed", zap.Error(err))
+	}
+}
+
+func runStatusHandler(runStore state.RunStateStore) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			w.WriteHeader(http.StatusMethodNotAllowed)
+			return
+		}
+		runID := strings.TrimSpace(r.URL.Query().Get("run_id"))
+		if runID == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": "run_id is required"})
+			return
+		}
+		run, err := runStore.GetRun(r.Context(), runID)
+		if err != nil {
+			if state.IsNotFound(err) {
+				w.WriteHeader(http.StatusNotFound)
+				_ = json.NewEncoder(w).Encode(map[string]any{"error": "run not found"})
+				return
+			}
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": err.Error()})
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(run)
 	}
 }

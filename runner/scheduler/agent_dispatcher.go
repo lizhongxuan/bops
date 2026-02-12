@@ -126,6 +126,7 @@ func (d *AgentDispatcher) Dispatch(ctx context.Context, task Task) (Result, erro
 		if attempt < attempts-1 {
 			logging.L().Warn("agent dispatch failed, retrying",
 				zap.String("task_id", task.ID),
+				zap.String("run_id", task.RunID),
 				zap.Int("attempt", attempt+1),
 				zap.Error(err),
 			)
@@ -217,6 +218,7 @@ func (d *AgentDispatcher) dispatchOnce(ctx context.Context, baseURL string, task
 			zap.String("body", body),
 			zap.String("url", url),
 			zap.String("task_id", task.ID),
+			zap.String("run_id", task.RunID),
 		)
 		if body != "" {
 			return Result{}, fmt.Errorf("agent dispatch failed: %s (%s)", resp.Status, body)

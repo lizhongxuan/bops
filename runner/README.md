@@ -184,5 +184,74 @@ sudo go run ./runner/examples/agent-server --addr :7072 --token runner-token
 
 ---
 
+## 13. 运行状态持久化（run_id）
+
+Runner 现在支持按 `run_id` 持久化和查询一次运行的状态快照。
+
+生命周期状态：
+- `queued`
+- `running`
+- `success`
+- `failed`
+- `canceled`
+- `interrupted`（重启对账后标记）
+
+### 13.1 可插拔存储接口
+
+Runner 核心不绑定数据库，业务程序通过 `state.RunStateStore` 注入：
+
+- `CreateRun(ctx, run)`
+- `UpdateRun(ctx, run)`
+- `GetRun(ctx, runID)`
+- `ListRuns(ctx, filter)`
+- `MarkInterruptedRunning(ctx, reason)`
+
+默认实现：
+- `state.NewInMemoryRunStore()`：仅进程内，重启丢失。
+- `state.NewFileStore(path)`：文件持久化（示例可用）。
+
+若使用内存存储，Runner 会输出非持久化告警。
+
+### 13.2 回调接口
+
+可选注入 `state.RunStateNotifier`，Runner 在状态变化时异步回调：
+
+回调字段：
+- `run_id`
+- `workflow_name`
+- `status`
+- `step`
+- `host`
+- `timestamp`
+- `error`
+- `version`
+
+回调失败不会改变运行结果状态；失败会记录到 `last_notify_error`。
+
+### 13.3 Engine 注入示例
+
+```go
+eng := engine.New(registry)
+eng.RunStore = myStore
+eng.Notifier = myNotifier
+eng.NotifyRetry = 2
+eng.NotifyDelay = 500 * time.Millisecond
+
+run, err := eng.ApplyWithRun(ctx, wf, engine.RunOptions{
+  RunID: "run-20260212-001",
+})
+```
+
+### 13.4 示例服务查询接口
+
+- `runner/examples/web-ui`
+  - `GET /run-status?run_id=<id>`
+- `runner/examples/agent-server`
+  - `GET /run-status?run_id=<id>`
+
+未知 `run_id` 返回 404（not found）。
+
+---
+
 如果需要更高级功能（持久化、审批、回滚），请参考 `exception.md` 与 `todo.md`。  
 如需扩展模块或接入自定义 agent，请联系维护者。
