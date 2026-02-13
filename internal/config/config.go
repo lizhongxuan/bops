@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -29,6 +30,9 @@ type Config struct {
 	DefaultAgent       string        `json:"default_agent"`
 	DefaultAgents      []string      `json:"default_agents"`
 	ToolConflictPolicy string        `json:"tool_conflict_policy"`
+	RalphModeEnabled   bool          `json:"ralph_mode_enabled"`
+	RalphAutoRoute     bool          `json:"ralph_auto_route_on_checks"`
+	RalphMemoryDir     string        `json:"ralph_memory_dir"`
 }
 
 type AgentConfig struct {
@@ -60,6 +64,9 @@ func DefaultConfig() Config {
 		DefaultAgent:       "",
 		DefaultAgents:      nil,
 		ToolConflictPolicy: "error",
+		RalphModeEnabled:   false,
+		RalphAutoRoute:     false,
+		RalphMemoryDir:     "./data/ai_loop_memory",
 	}
 }
 
@@ -128,6 +135,23 @@ func ApplyEnvOverrides(cfg *Config) error {
 	}
 	if raw := os.Getenv("BOPS_TOOL_CONFLICT_POLICY"); raw != "" {
 		cfg.ToolConflictPolicy = raw
+	}
+	if raw := os.Getenv("BOPS_RALPH_MODE_ENABLED"); raw != "" {
+		v, err := strconv.ParseBool(strings.TrimSpace(raw))
+		if err != nil {
+			return err
+		}
+		cfg.RalphModeEnabled = v
+	}
+	if raw := os.Getenv("BOPS_RALPH_AUTO_ROUTE_ON_CHECKS"); raw != "" {
+		v, err := strconv.ParseBool(strings.TrimSpace(raw))
+		if err != nil {
+			return err
+		}
+		cfg.RalphAutoRoute = v
+	}
+	if raw := os.Getenv("BOPS_RALPH_MEMORY_DIR"); raw != "" {
+		cfg.RalphMemoryDir = strings.TrimSpace(raw)
 	}
 	return nil
 }

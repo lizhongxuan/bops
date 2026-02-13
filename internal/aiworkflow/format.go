@@ -72,10 +72,25 @@ func buildFixPrompt(yamlText string, issues []string, lastError string) string {
 	return builder.String()
 }
 
-func buildLoopPrompt(prompt, contextText, baseYAML string, toolNames, toolHistory []string, iteration int) string {
+func buildLoopPrompt(
+	prompt,
+	contextText,
+	baseYAML string,
+	toolNames,
+	toolHistory []string,
+	iteration int,
+	profile string,
+	completionToken string,
+	completionChecks []string,
+	stopHookReasons []string,
+	progressLog string,
+) string {
 	builder := strings.Builder{}
 	builder.WriteString("你是运维工作流自主循环 Agent。每轮只做一件事。\n")
 	builder.WriteString(fmt.Sprintf("当前轮次: %d\n\n", iteration))
+	if strings.TrimSpace(profile) != "" {
+		builder.WriteString(fmt.Sprintf("循环模式: %s\n\n", strings.TrimSpace(profile)))
+	}
 	if contextText != "" {
 		builder.WriteString("上下文:\n")
 		builder.WriteString(contextText)
@@ -110,6 +125,47 @@ func buildLoopPrompt(prompt, contextText, baseYAML string, toolNames, toolHistor
 		}
 	} else {
 		builder.WriteString("工具历史: 无\n")
+	}
+	if strings.TrimSpace(completionToken) != "" || len(completionChecks) > 0 {
+		builder.WriteString("完成契约:\n")
+		if strings.TrimSpace(completionToken) != "" {
+			builder.WriteString("- completion_token: ")
+			builder.WriteString(strings.TrimSpace(completionToken))
+			builder.WriteString("\n")
+		}
+		if len(completionChecks) > 0 {
+			builder.WriteString("- completion_checks:\n")
+			for _, check := range completionChecks {
+				if strings.TrimSpace(check) == "" {
+					continue
+				}
+				builder.WriteString("  - ")
+				builder.WriteString(strings.TrimSpace(check))
+				builder.WriteString("\n")
+			}
+		}
+	}
+	if len(stopHookReasons) > 0 {
+		builder.WriteString("上一轮 stop-hook 拦截原因:\n")
+		for _, reason := range stopHookReasons {
+			if strings.TrimSpace(reason) == "" {
+				continue
+			}
+			builder.WriteString("- ")
+			builder.WriteString(truncateRunes(reason, 220))
+			builder.WriteString("\n")
+		}
+	}
+	if strings.TrimSpace(progressLog) != "" {
+		builder.WriteString("会话进度日志(最近):\n")
+		for _, line := range tailStrings(strings.Split(strings.TrimSpace(progressLog), "\n"), 6) {
+			if strings.TrimSpace(line) == "" {
+				continue
+			}
+			builder.WriteString("- ")
+			builder.WriteString(truncateRunes(line, 220))
+			builder.WriteString("\n")
+		}
 	}
 
 	builder.WriteString("\n输出要求:\n")

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -13,10 +14,10 @@ import (
 	"bops/internal/aistore"
 	"bops/internal/aiworkflow"
 	"bops/internal/aiworkflowstore"
-	"bops/runner/logging"
 	"bops/internal/skills"
 	"bops/internal/validationenv"
 	"bops/internal/validationrun"
+	"bops/runner/logging"
 	"bops/runner/workflow"
 	"github.com/cloudwego/eino/components/tool"
 	"go.uber.org/zap"
@@ -123,6 +124,8 @@ type aiDraftResponse struct {
 type aiStreamRequest struct {
 	Mode               string         `json:"mode,omitempty"`
 	AgentMode          string         `json:"agent_mode,omitempty"`
+	LoopProfile        string         `json:"loop_profile,omitempty"`
+	RalphMode          bool           `json:"ralph_mode,omitempty"`
 	AgentName          string         `json:"agent_name,omitempty"`
 	Agents             []string       `json:"agents,omitempty"`
 	SessionKey         string         `json:"session_key,omitempty"`
@@ -135,6 +138,13 @@ type aiStreamRequest struct {
 	Execute            bool           `json:"execute,omitempty"`
 	MaxRetries         int            `json:"max_retries,omitempty"`
 	LoopMaxIters       int            `json:"loop_max_iters,omitempty"`
+	CompletionToken    string         `json:"completion_token,omitempty"`
+	CompletionChecks   []string       `json:"completion_checks,omitempty"`
+	NoProgressLimit    int            `json:"no_progress_limit,omitempty"`
+	PerIterTimeoutMs   int            `json:"per_iter_timeout_ms,omitempty"`
+	MaxToolCalls       int            `json:"max_tool_calls,omitempty"`
+	MaxBudgetUnits     int            `json:"max_budget_units,omitempty"`
+	TaskClass          string         `json:"task_class,omitempty"`
 	DraftID            string         `json:"draft_id,omitempty"`
 	ResumeCheckpointID string         `json:"resume_checkpoint_id,omitempty"`
 	PauseAfterStep     bool           `json:"pause_after_step,omitempty"`
@@ -675,6 +685,19 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 			agentMode = "pipeline"
 		}
 	}
+	ralphRequested := req.RalphMode || strings.EqualFold(strings.TrimSpace(req.LoopProfile), "ralph")
+	if ralphRequested && !s.cfg.RalphModeEnabled {
+		logging.L().Warn("ralph mode request ignored because feature is disabled")
+	}
+	if !ralphRequested && s.cfg.RalphAutoRoute && len(req.CompletionChecks) > 0 {
+		ralphRequested = true
+	}
+	if ralphRequested && !s.cfg.RalphModeEnabled {
+		ralphRequested = false
+	}
+	if ralphRequested && mode == string(aiworkflow.ModeGenerate) && agentMode == "multi_create" {
+		agentMode = "loop"
+	}
 	if agentMode != "loop" && agentMode != "multi" && agentMode != "multi_create" {
 		agentMode = "pipeline"
 	}
@@ -718,6 +741,9 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 	logging.L().Debug("ai workflow stream start",
 		zap.String("mode", mode),
 		zap.String("agent_mode", agentMode),
+		zap.String("loop_profile", strings.TrimSpace(req.LoopProfile)),
+		zap.Bool("ralph_mode", ralphRequested),
+		zap.Int("completion_checks", len(req.CompletionChecks)),
 		zap.Int("prompt_len", len(strings.TrimSpace(req.Prompt))),
 		zap.Int("yaml_len", len(req.YAML)),
 		zap.Int("issues", len(req.Issues)),
@@ -758,6 +784,10 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 	}
 
 	contextText := s.buildContextText(req.Context)
+	loopProfile := strings.TrimSpace(req.LoopProfile)
+	if !ralphRequested && strings.EqualFold(loopProfile, "ralph") {
+		loopProfile = ""
+	}
 	baseYAML := strings.TrimSpace(req.YAML)
 	if baseYAML != "" && countStepsInYAML(baseYAML) == 0 {
 		baseYAML = ""
@@ -772,6 +802,14 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 		EventSink:          sink,
 		StreamSink:         streamSink,
 		BaseYAML:           baseYAML,
+		LoopProfile:        loopProfile,
+		RalphMode:          ralphRequested,
+		CompletionToken:    strings.TrimSpace(req.CompletionToken),
+		CompletionChecks:   append([]string{}, req.CompletionChecks...),
+		NoProgressLimit:    req.NoProgressLimit,
+		PerIterTimeoutMs:   req.PerIterTimeoutMs,
+		MaxToolCalls:       req.MaxToolCalls,
+		MaxBudgetUnits:     req.MaxBudgetUnits,
 		DraftID:            strings.TrimSpace(req.DraftID),
 		ResumeCheckpointID: strings.TrimSpace(req.ResumeCheckpointID),
 		PauseAfterStep:     req.PauseAfterStep,
@@ -790,8 +828,16 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 		opts.ToolExecutor = toolExecutor
 		opts.ToolNames = toolNames
 		opts.LoopMaxIters = req.LoopMaxIters
-		opts.FallbackToPipeline = true
+		opts.FallbackToPipeline = !opts.RalphMode
 		opts.FallbackSystemPrompt = systemPrompt
+		if opts.RalphMode {
+			memoryRoot := strings.TrimSpace(s.cfg.RalphMemoryDir)
+			if memoryRoot == "" {
+				memoryRoot = filepath.Join(s.cfg.DataDir, "ai_loop_memory")
+			}
+			opts.LoopProfile = "ralph"
+			opts.LoopMemoryRoot = memoryRoot
+		}
 	}
 
 	go func() {
@@ -1037,12 +1083,18 @@ func (s *Server) handleAIWorkflowStream(w http.ResponseWriter, r *http.Request) 
 			}
 			if pending.state.LoopMetrics != nil {
 				payload["loop_metrics"] = map[string]any{
-					"loop_id":       pending.state.LoopMetrics.LoopID,
-					"iterations":    pending.state.LoopMetrics.Iterations,
-					"tool_calls":    pending.state.LoopMetrics.ToolCalls,
-					"tool_failures": pending.state.LoopMetrics.ToolFailures,
-					"duration_ms":   pending.state.LoopMetrics.DurationMs,
+					"loop_id":         pending.state.LoopMetrics.LoopID,
+					"session_id":      pending.state.LoopMetrics.SessionID,
+					"mode_profile":    pending.state.LoopMetrics.ModeProfile,
+					"iterations":      pending.state.LoopMetrics.Iterations,
+					"tool_calls":      pending.state.LoopMetrics.ToolCalls,
+					"tool_failures":   pending.state.LoopMetrics.ToolFailures,
+					"duration_ms":     pending.state.LoopMetrics.DurationMs,
+					"terminal_reason": pending.state.LoopMetrics.Terminal,
+					"checks":          pending.state.LoopMetrics.Checks,
+					"non_durable":     pending.state.LoopMetrics.NonDurable,
 				}
+				payload["loop_telemetry"] = aiworkflow.TelemetryFromLoopMetrics(pending.state.LoopMetrics, req.TaskClass)
 			}
 			if pending.simulation != nil {
 				payload["simulation"] = pending.simulation

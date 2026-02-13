@@ -89,6 +89,16 @@ type RunOptions struct {
 	ToolExecutor         ToolExecutor
 	ToolNames            []string
 	LoopMaxIters         int
+	LoopProfile          string
+	RalphMode            bool
+	CompletionToken      string
+	CompletionChecks     []string
+	NoProgressLimit      int
+	PerIterTimeoutMs     int
+	MaxToolCalls         int
+	MaxBudgetUnits       int
+	LoopMemoryRoot       string
+	LoopMemoryStore      LoopMemoryStore
 	FallbackToPipeline   bool
 	FallbackSystemPrompt string
 	ResumeCheckpointID   string
@@ -126,10 +136,32 @@ const (
 
 type LoopMetrics struct {
 	LoopID       string
+	SessionID    string
+	ModeProfile  string
 	Iterations   int
 	ToolCalls    int
 	ToolFailures int
 	DurationMs   int64
+	Terminal     LoopTerminationReason
+	Checks       []CompletionCheckResult
+	NonDurable   bool
+}
+
+type LoopTerminationReason string
+
+const (
+	LoopTerminationCompleted       LoopTerminationReason = "completed"
+	LoopTerminationMaxIters        LoopTerminationReason = "max_iters"
+	LoopTerminationNoProgress      LoopTerminationReason = "no_progress"
+	LoopTerminationBudgetExceeded  LoopTerminationReason = "budget_exceeded"
+	LoopTerminationContextCanceled LoopTerminationReason = "context_canceled"
+	LoopTerminationError           LoopTerminationReason = "error"
+)
+
+type CompletionCheckResult struct {
+	Name   string `json:"name"`
+	Passed bool   `json:"passed"`
+	Reason string `json:"reason,omitempty"`
 }
 
 type Event struct {

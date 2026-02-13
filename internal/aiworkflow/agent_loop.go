@@ -2,7 +2,10 @@ package aiworkflow
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -247,7 +250,10 @@ func (p *Pipeline) runAgentLoop(ctx context.Context, state *State, opts RunOptio
 	if maxIters <= 0 {
 		maxIters = 6
 	}
+	profile := normalizeLoopProfile(opts)
+	ralphEnabled := profile == "ralph"
 	loopID := fmt.Sprintf("loop-%d", time.Now().UnixNano())
+	sessionID := resolveLoopSessionID(opts, loopID)
 	toolNames := opts.ToolNames
 	toolHistory := make([]string, 0, maxIters)
 	consecutiveFailures := 0
@@ -256,37 +262,167 @@ func (p *Pipeline) runAgentLoop(ctx context.Context, state *State, opts RunOptio
 	lastIteration := 0
 	toolCalls := 0
 	toolFailures := 0
+	terminationReason := LoopTerminationError
+	completionChecks := []CompletionCheckResult{}
+	noProgressLimit := opts.NoProgressLimit
+	if ralphEnabled && noProgressLimit <= 0 {
+		noProgressLimit = 2
+	}
+
+	var (
+		memoryStore LoopMemoryStore
+		memory      = defaultLoopMemorySnapshot(sessionID)
+		nonDurable  bool
+	)
+	if ralphEnabled {
+		memoryStore = opts.LoopMemoryStore
+		if memoryStore == nil {
+			if strings.TrimSpace(opts.LoopMemoryRoot) != "" {
+				memoryStore = NewFileLoopMemoryStore(opts.LoopMemoryRoot)
+			} else {
+				memoryStore = NewInMemoryLoopMemoryStore()
+			}
+		}
+		loaded, _, err := memoryStore.Load(ctx, sessionID)
+		if err != nil {
+			memoryStore = NewInMemoryLoopMemoryStore()
+			loaded, _, err = memoryStore.Load(ctx, sessionID)
+			if err != nil {
+				terminationReason = LoopTerminationError
+				return state, fmt.Errorf("load loop memory fallback: %w", err)
+			}
+			emitLoopEvent(state, loopEventPayload{
+				LoopID:      loopID,
+				Iteration:   0,
+				AgentStatus: "loop_memory",
+				Node:        "loop_memory",
+				Status:      "warning",
+				Message:     "durable memory backend unavailable, switched to in-memory store",
+				DisplayName: "loop memory fallback",
+				EventType:   "loop_memory_warning",
+			})
+		}
+		memory = loaded
+		memory.SessionID = sessionID
+		if len(memory.Checkpoint.ToolHistory) > 0 {
+			toolHistory = append(toolHistory, memory.Checkpoint.ToolHistory...)
+		}
+		if strings.TrimSpace(memory.Checkpoint.LastYAML) != "" && strings.TrimSpace(state.BaseYAML) == "" {
+			state.BaseYAML = memory.Checkpoint.LastYAML
+		}
+		nonDurable = !memoryStore.IsDurable()
+		if nonDurable {
+			emitLoopEvent(state, loopEventPayload{
+				LoopID:      loopID,
+				Iteration:   0,
+				AgentStatus: "loop_memory",
+				Node:        "loop_memory",
+				Status:      "warning",
+				Message:     "durable memory backend not configured, fallback to in-memory store",
+				DisplayName: "loop memory fallback",
+				EventType:   "loop_memory_warning",
+			})
+		}
+	}
+	saveLoopMemory := func() error {
+		if !ralphEnabled || memoryStore == nil {
+			return nil
+		}
+		if err := memoryStore.Save(ctx, sessionID, memory); err != nil {
+			if memoryStore.IsDurable() {
+				emitLoopEvent(state, loopEventPayload{
+					LoopID:      loopID,
+					Iteration:   lastIteration,
+					AgentStatus: "loop_memory",
+					Node:        "loop_memory",
+					Status:      "warning",
+					Message:     "durable memory save failed, switched to in-memory store",
+					DisplayName: "loop memory fallback",
+					EventType:   "loop_memory_warning",
+				})
+				memoryStore = NewInMemoryLoopMemoryStore()
+				nonDurable = true
+				if fallbackErr := memoryStore.Save(ctx, sessionID, memory); fallbackErr != nil {
+					return fmt.Errorf("save loop memory fallback: %w", fallbackErr)
+				}
+				return nil
+			}
+			return fmt.Errorf("save loop memory: %w", err)
+		}
+		return nil
+	}
 	defer func() {
 		if state == nil {
 			return
 		}
 		state.LoopMetrics = &LoopMetrics{
 			LoopID:       loopID,
+			SessionID:    sessionID,
+			ModeProfile:  profile,
 			Iterations:   lastIteration,
 			ToolCalls:    toolCalls,
 			ToolFailures: toolFailures,
 			DurationMs:   time.Since(started).Milliseconds(),
+			Terminal:     terminationReason,
+			Checks:       append([]CompletionCheckResult{}, completionChecks...),
+			NonDurable:   nonDurable,
 		}
 	}()
 
 	for iteration := 1; iteration <= maxIters; iteration++ {
 		lastIteration = iteration
 		if err := ctx.Err(); err != nil {
+			terminationReason = LoopTerminationContextCanceled
 			return state, err
 		}
-		promptText := buildLoopPrompt(state.Prompt, state.ContextText, state.BaseYAML, toolNames, toolHistory, iteration)
+		if opts.MaxToolCalls > 0 && toolCalls >= opts.MaxToolCalls {
+			terminationReason = LoopTerminationBudgetExceeded
+			return state, fmt.Errorf("loop budget exceeded: max tool calls reached")
+		}
+		if opts.MaxBudgetUnits > 0 && (iteration+toolCalls) > opts.MaxBudgetUnits {
+			terminationReason = LoopTerminationBudgetExceeded
+			return state, fmt.Errorf("loop budget exceeded: max budget units reached")
+		}
+		promptText := buildLoopPrompt(
+			state.Prompt,
+			state.ContextText,
+			state.BaseYAML,
+			toolNames,
+			toolHistory,
+			iteration,
+			profile,
+			opts.CompletionToken,
+			opts.CompletionChecks,
+			memory.Checkpoint.LastStopReasons,
+			memory.Progress,
+		)
 		if len(promptText) > maxPromptChars {
+			terminationReason = LoopTerminationError
 			return state, fmt.Errorf("loop prompt too long")
 		}
 		messages := []ai.Message{
 			{Role: "system", Content: state.SystemPrompt},
 			{Role: "user", Content: promptText},
 		}
-
-		reply, thought, err := p.chatWithThought(ai.WithModelRole(ctx, ai.RolePlanner), messages, state.StreamSink)
+		iterCtx := ctx
+		cancelIter := func() {}
+		if opts.PerIterTimeoutMs > 0 {
+			iterCtx, cancelIter = context.WithTimeout(ctx, time.Duration(opts.PerIterTimeoutMs)*time.Millisecond)
+		}
+		reply, thought, err := p.chatWithThought(ai.WithModelRole(iterCtx, ai.RolePlanner), messages, state.StreamSink)
+		cancelIter()
 		if err != nil {
+			if errors.Is(err, context.Canceled) && ctx.Err() != nil {
+				terminationReason = LoopTerminationContextCanceled
+				return state, ctx.Err()
+			}
+			if errors.Is(err, context.DeadlineExceeded) {
+				terminationReason = LoopTerminationBudgetExceeded
+				return state, fmt.Errorf("loop iteration timeout")
+			}
 			consecutiveFailures++
 			if consecutiveFailures >= 2 {
+				terminationReason = LoopTerminationError
 				return state, err
 			}
 			continue
@@ -296,6 +432,7 @@ func (p *Pipeline) runAgentLoop(ctx context.Context, state *State, opts RunOptio
 		if err != nil {
 			consecutiveFailures++
 			if consecutiveFailures >= 2 {
+				terminationReason = LoopTerminationError
 				return state, err
 			}
 			continue
@@ -303,42 +440,113 @@ func (p *Pipeline) runAgentLoop(ctx context.Context, state *State, opts RunOptio
 
 		switch normalizeLoopAction(action.Action) {
 		case "final":
-			yamlText := strings.TrimSpace(action.YAML)
-			if yamlText != "" {
-				state.YAML = normalizeStepsOnlyYAML(yamlText)
-				if strings.TrimSpace(state.YAML) == "" {
+			candidateYAML := ""
+			candidateQuestions := append([]string{}, action.Questions...)
+			if yamlText := strings.TrimSpace(action.YAML); yamlText != "" {
+				candidateYAML = normalizeStepsOnlyYAML(yamlText)
+				if strings.TrimSpace(candidateYAML) == "" {
+					terminationReason = LoopTerminationError
 					return state, fmt.Errorf("loop final output missing steps")
 				}
-				state.Questions = action.Questions
-				return state, nil
 			}
-			if action.Result != "" {
+			if candidateYAML == "" && action.Result != "" {
 				yamlText, questions, err := extractWorkflowYAML(action.Result)
 				if err == nil {
-					state.YAML = yamlText
-					state.Questions = mergeQuestions(state.Questions, questions)
-					return state, nil
+					candidateYAML = yamlText
+					candidateQuestions = mergeQuestions(candidateQuestions, questions)
 				}
 			}
-			yamlText, questions, err := extractWorkflowYAML(reply)
-			if err == nil {
-				state.YAML = yamlText
-				state.Questions = mergeQuestions(state.Questions, questions)
+			if candidateYAML == "" {
+				yamlText, questions, err := extractWorkflowYAML(reply)
+				if err == nil {
+					candidateYAML = yamlText
+					candidateQuestions = mergeQuestions(candidateQuestions, questions)
+				}
+			}
+			if strings.TrimSpace(candidateYAML) == "" {
+				terminationReason = LoopTerminationError
+				return state, fmt.Errorf("loop final output missing yaml")
+			}
+			state.YAML = candidateYAML
+			state.Questions = mergeQuestions(state.Questions, candidateQuestions)
+
+			if !ralphEnabled {
+				terminationReason = LoopTerminationCompleted
 				return state, nil
 			}
-			return state, fmt.Errorf("loop final output missing yaml")
+
+			evaluation := evaluateLoopCompletion(state, action, reply, opts, memory)
+			completionChecks = append([]CompletionCheckResult{}, evaluation.CheckResults...)
+			if evaluation.Passed {
+				terminationReason = LoopTerminationCompleted
+				memory.Checkpoint.Iteration = iteration
+				memory.Checkpoint.ToolCalls = toolCalls
+				memory.Checkpoint.ToolFailures = toolFailures
+				memory.Checkpoint.LastYAML = state.YAML
+				memory.Checkpoint.ToolHistory = append([]string{}, tailStrings(toolHistory, 32)...)
+				appendLoopProgress(&memory, fmt.Sprintf("[%s] iteration=%d final accepted", time.Now().Format(time.RFC3339), iteration))
+				if err := saveLoopMemory(); err != nil {
+					terminationReason = LoopTerminationError
+					return state, err
+				}
+				return state, nil
+			}
+
+			memory.Checkpoint.LastStopReasons = append([]string{}, evaluation.Failed...)
+			appendLoopProgress(&memory, fmt.Sprintf("[%s] iteration=%d final blocked: %s", time.Now().Format(time.RFC3339), iteration, strings.Join(evaluation.Failed, "; ")))
+			emitLoopEvent(state, loopEventPayload{
+				LoopID:      loopID,
+				Iteration:   iteration,
+				AgentStatus: "completion_blocked",
+				Node:        "stop_hook",
+				Status:      "blocked",
+				Message:     strings.Join(evaluation.Failed, "; "),
+				DisplayName: "stop hook blocked completion",
+				EventType:   "completion_blocked",
+				Data: map[string]any{
+					"failed_checks": evaluation.Failed,
+				},
+			})
+
+			fingerprint := computeLoopFingerprint(action, state.YAML, tailStrings(toolHistory, 4), completionChecks)
+			if updateNoProgress(&memory.Checkpoint, fingerprint, noProgressLimit) {
+				terminationReason = LoopTerminationNoProgress
+				if err := saveLoopMemory(); err != nil {
+					return state, err
+				}
+				return state, fmt.Errorf("loop no progress detected")
+			}
+			memory.Checkpoint.Iteration = iteration
+			memory.Checkpoint.ToolCalls = toolCalls
+			memory.Checkpoint.ToolFailures = toolFailures
+			memory.Checkpoint.LastYAML = state.YAML
+			memory.Checkpoint.ToolHistory = append([]string{}, tailStrings(toolHistory, 32)...)
+			if err := saveLoopMemory(); err != nil {
+				terminationReason = LoopTerminationError
+				return state, err
+			}
+			consecutiveFailures = 0
+			toolHistory = append(toolHistory, fmt.Sprintf("stop_hook_blocked=%s", strings.Join(evaluation.Failed, "; ")))
+			continue
 		case "need_more_info":
 			if len(action.Questions) > 0 {
 				state.Questions = mergeQuestions(state.Questions, action.Questions)
 			}
+			terminationReason = LoopTerminationCompleted
 			return state, nil
 		case "tool_call":
 			toolName := strings.TrimSpace(action.Tool)
 			if toolName == "" {
+				terminationReason = LoopTerminationError
 				return state, fmt.Errorf("tool_call missing tool name")
 			}
 			if opts.ToolExecutor == nil {
+				terminationReason = LoopTerminationError
 				return state, fmt.Errorf("tool executor is not configured")
+			}
+			if opts.MaxToolCalls > 0 && toolCalls >= opts.MaxToolCalls {
+				terminationReason = LoopTerminationBudgetExceeded
+				return state, fmt.Errorf("loop budget exceeded: max tool calls reached")
 			}
 			toolCalls++
 			callID := fmt.Sprintf("%s-%d-%s", loopID, iteration, toolName)
@@ -351,9 +559,24 @@ func (p *Pipeline) runAgentLoop(ctx context.Context, state *State, opts RunOptio
 				Message:     fmt.Sprintf("调用工具 %s", toolName),
 				CallID:      callID,
 				DisplayName: fmt.Sprintf("使用工具 %s", toolName),
+				EventType:   "tool_call",
 			})
-			output, err := opts.ToolExecutor(ctx, toolName, action.Args)
+			toolCtx := ctx
+			cancelTool := func() {}
+			if opts.PerIterTimeoutMs > 0 {
+				toolCtx, cancelTool = context.WithTimeout(ctx, time.Duration(opts.PerIterTimeoutMs)*time.Millisecond)
+			}
+			output, err := opts.ToolExecutor(toolCtx, toolName, action.Args)
+			cancelTool()
 			if err != nil {
+				if errors.Is(err, context.Canceled) && ctx.Err() != nil {
+					terminationReason = LoopTerminationContextCanceled
+					return state, ctx.Err()
+				}
+				if errors.Is(err, context.DeadlineExceeded) {
+					terminationReason = LoopTerminationBudgetExceeded
+					return state, fmt.Errorf("tool call timeout")
+				}
 				toolFailures++
 				emitLoopEvent(state, loopEventPayload{
 					LoopID:      loopID,
@@ -367,12 +590,25 @@ func (p *Pipeline) runAgentLoop(ctx context.Context, state *State, opts RunOptio
 					Data: map[string]any{
 						"tool_output_content": err.Error(),
 					},
+					EventType: "tool_result",
 				})
 				consecutiveFailures++
 				if consecutiveFailures >= 2 {
+					terminationReason = LoopTerminationError
 					return state, err
 				}
 				toolHistory = append(toolHistory, fmt.Sprintf("tool=%s error=%s", toolName, err.Error()))
+				if ralphEnabled {
+					appendLoopProgress(&memory, fmt.Sprintf("[%s] iteration=%d tool=%s error=%s", time.Now().Format(time.RFC3339), iteration, toolName, err.Error()))
+					memory.Checkpoint.Iteration = iteration
+					memory.Checkpoint.ToolCalls = toolCalls
+					memory.Checkpoint.ToolFailures = toolFailures
+					memory.Checkpoint.ToolHistory = append([]string{}, tailStrings(toolHistory, 32)...)
+					if err := saveLoopMemory(); err != nil {
+						terminationReason = LoopTerminationError
+						return state, err
+					}
+				}
 				continue
 			}
 			consecutiveFailures = 0
@@ -388,15 +624,97 @@ func (p *Pipeline) runAgentLoop(ctx context.Context, state *State, opts RunOptio
 				Data: map[string]any{
 					"tool_output_content": output,
 				},
+				EventType: "tool_result",
 			})
 			summary := ai.SummarizeToolOutput(output, 400)
 			toolHistory = append(toolHistory, fmt.Sprintf("tool=%s output=%s", toolName, summary))
+			if ralphEnabled {
+				appendLoopProgress(&memory, fmt.Sprintf("[%s] iteration=%d tool=%s output=%s", time.Now().Format(time.RFC3339), iteration, toolName, summary))
+				fingerprint := computeLoopFingerprint(action, state.YAML, tailStrings(toolHistory, 4), completionChecks)
+				if updateNoProgress(&memory.Checkpoint, fingerprint, noProgressLimit) {
+					terminationReason = LoopTerminationNoProgress
+					if err := saveLoopMemory(); err != nil {
+						return state, err
+					}
+					return state, fmt.Errorf("loop no progress detected")
+				}
+				memory.Checkpoint.Iteration = iteration
+				memory.Checkpoint.ToolCalls = toolCalls
+				memory.Checkpoint.ToolFailures = toolFailures
+				memory.Checkpoint.ToolHistory = append([]string{}, tailStrings(toolHistory, 32)...)
+				if err := saveLoopMemory(); err != nil {
+					terminationReason = LoopTerminationError
+					return state, err
+				}
+			}
 			continue
 		default:
+			terminationReason = LoopTerminationError
 			return state, fmt.Errorf("unknown loop action")
 		}
 	}
+	terminationReason = LoopTerminationMaxIters
 	return state, fmt.Errorf("loop max iterations reached")
+}
+
+func normalizeLoopProfile(opts RunOptions) string {
+	if opts.RalphMode || strings.EqualFold(strings.TrimSpace(opts.LoopProfile), "ralph") {
+		return "ralph"
+	}
+	return "default"
+}
+
+func resolveLoopSessionID(opts RunOptions, fallback string) string {
+	if id := strings.TrimSpace(opts.ResumeCheckpointID); id != "" {
+		return normalizeLoopSessionID(id)
+	}
+	if id := strings.TrimSpace(opts.SessionKey); id != "" {
+		return normalizeLoopSessionID(id)
+	}
+	if id := strings.TrimSpace(opts.DraftID); id != "" {
+		return normalizeLoopSessionID(id)
+	}
+	return normalizeLoopSessionID(fallback)
+}
+
+func appendLoopProgress(snapshot *LoopMemorySnapshot, line string) {
+	if snapshot == nil || strings.TrimSpace(line) == "" {
+		return
+	}
+	if snapshot.Progress != "" && !strings.HasSuffix(snapshot.Progress, "\n") {
+		snapshot.Progress += "\n"
+	}
+	snapshot.Progress += strings.TrimSpace(line) + "\n"
+}
+
+func computeLoopFingerprint(action loopAction, yamlText string, history []string, checks []CompletionCheckResult) string {
+	lastHistory := ""
+	if len(history) > 0 {
+		lastHistory = strings.TrimSpace(history[len(history)-1])
+	}
+	payload := map[string]any{
+		"action":       strings.ToLower(strings.TrimSpace(action.Action)),
+		"tool":         strings.ToLower(strings.TrimSpace(action.Tool)),
+		"yaml":         strings.TrimSpace(stepsOnlyYAML(yamlText)),
+		"last_history": lastHistory,
+		"checks":       checks,
+	}
+	data, _ := json.Marshal(payload)
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
+func updateNoProgress(checkpoint *LoopCheckpoint, fingerprint string, limit int) bool {
+	if checkpoint == nil || limit <= 0 || strings.TrimSpace(fingerprint) == "" {
+		return false
+	}
+	if checkpoint.LastFingerprint == fingerprint {
+		checkpoint.StableIterations++
+	} else {
+		checkpoint.StableIterations = 0
+	}
+	checkpoint.LastFingerprint = fingerprint
+	return checkpoint.StableIterations >= limit
 }
 
 func parseLoopAction(reply string) (loopAction, error) {
@@ -436,6 +754,7 @@ type loopEventPayload struct {
 	Message     string
 	CallID      string
 	DisplayName string
+	EventType   string
 	Data        map[string]any
 }
 
@@ -453,6 +772,7 @@ func emitLoopEvent(state *State, payload loopEventPayload) {
 		AgentID:     state.AgentID,
 		AgentName:   state.AgentName,
 		AgentRole:   state.AgentRole,
+		EventType:   payload.EventType,
 		LoopID:      payload.LoopID,
 		Iteration:   payload.Iteration,
 		AgentStatus: payload.AgentStatus,

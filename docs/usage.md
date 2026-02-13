@@ -23,7 +23,10 @@
   "data_dir": "./data",
   "state_path": "./data/state.json",
   "server_listen": "127.0.0.1:7070",
-  "agent_listen": "127.0.0.1:7071"
+  "agent_listen": "127.0.0.1:7071",
+  "ralph_mode_enabled": false,
+  "ralph_auto_route_on_checks": false,
+  "ralph_memory_dir": "./data/ai_loop_memory"
 }
 ```
 
@@ -65,6 +68,28 @@
 - `agent_name`: 指定主 Agent（默认为空，走默认 Loop Agent）
 - `agents`: 参与协作的 Agent 名称数组（触发 multi 模式）
 - `agent_mode`: `loop` / `multi` / `pipeline`，当 `agents` 非空时应使用 `multi`
+
+### Ralph Loop（Stop Hook）参数
+
+仅在 `agent_mode=loop` 且服务端 `ralph_mode_enabled=true` 时生效:
+
+- `ralph_mode`: 显式开启 Ralph 模式（布尔）
+- `loop_profile`: `ralph`（可选，和 `ralph_mode` 等效）
+- `completion_token`: 完成口令（例如 `<promise>COMPLETE</promise>`）
+- `completion_checks`: 客观检查列表（如 `has_steps` / `tests_green` / `prd_all_pass` / `no_high_risk`）
+- `loop_max_iters`: 最大迭代次数
+- `no_progress_limit`: 连续无进展阈值，达到后以 `no_progress` 终止
+- `per_iter_timeout_ms`: 每轮超时（毫秒）
+- `max_tool_calls`: 工具调用上限
+- `max_budget_units`: 预算上限（迭代 + 工具调用）
+- `task_class`: 任务类别标签（用于效果报表分组）
+
+流式 `result.loop_metrics` 会返回:
+- `terminal_reason`: `completed` / `max_iters` / `no_progress` / `budget_exceeded` / `context_canceled` / `error`
+- `checks`: 每个 completion check 的通过情况与原因
+- `mode_profile`, `session_id`, `non_durable`
+
+同时返回 `result.loop_telemetry`，可直接作为效果评估数据集输入。
 
 验证终端:
 - 在首页执行“沙箱验证”后，点击“终端详情”进入 `验证终端` 页面查看 stdout/stderr。

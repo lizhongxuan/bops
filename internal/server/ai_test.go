@@ -408,3 +408,71 @@ func TestAIWorkflowStreamSSEOrder(t *testing.T) {
 		t.Fatalf("expected status to appear before result")
 	}
 }
+
+func TestAIWorkflowStreamRalphLoopMetrics(t *testing.T) {
+	srv := newTestServer(t)
+	srv.cfg.RalphModeEnabled = true
+	srv.cfg.RalphMemoryDir = filepath.Join(t.TempDir(), "ralph-memory")
+	final := `{"action":"final","yaml":"version: v0.1\nname: demo\nsteps:\n  - name: step1\n    action: cmd.run\n    args:\n      cmd: \"echo hi\"\n"}`
+	client := &streamSequence{responses: []string{final}}
+	workflow, err := aiworkflow.New(aiworkflow.Config{
+		Client:       client,
+		SystemPrompt: srv.aiPrompt,
+		MaxRetries:   1,
+	})
+	if err != nil {
+		t.Fatalf("init ai workflow: %v", err)
+	}
+	srv.aiWorkflow = workflow
+
+	body := bytes.NewBufferString(`{"prompt":"install nginx","agent_mode":"loop","ralph_mode":true,"loop_profile":"ralph","completion_checks":["has_steps"],"task_class":"backup"}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/workflow/stream", body)
+	rec := newStreamRecorder()
+
+	srv.handleAIWorkflowStream(rec, req)
+	if rec.status != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.status)
+	}
+	output := rec.body.String()
+	if !strings.Contains(output, `"mode_profile":"ralph"`) {
+		t.Fatalf("expected ralph mode_profile in result payload")
+	}
+	if !strings.Contains(output, `"terminal_reason":"completed"`) {
+		t.Fatalf("expected completed terminal reason in result payload")
+	}
+	if !strings.Contains(output, `"task_class":"backup"`) {
+		t.Fatalf("expected task_class in telemetry payload")
+	}
+}
+
+func TestAIWorkflowStreamRalphDisabledFallsBack(t *testing.T) {
+	srv := newTestServer(t)
+	srv.cfg.RalphModeEnabled = false
+	final := `{"action":"final","yaml":"version: v0.1\nname: demo\nsteps:\n  - name: step1\n    action: cmd.run\n    args:\n      cmd: \"echo hi\"\n"}`
+	client := &streamSequence{responses: []string{final}}
+	workflow, err := aiworkflow.New(aiworkflow.Config{
+		Client:       client,
+		SystemPrompt: srv.aiPrompt,
+		MaxRetries:   1,
+	})
+	if err != nil {
+		t.Fatalf("init ai workflow: %v", err)
+	}
+	srv.aiWorkflow = workflow
+
+	body := bytes.NewBufferString(`{"prompt":"install nginx","agent_mode":"loop","ralph_mode":true,"loop_profile":"ralph","completion_checks":["has_steps"]}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/ai/workflow/stream", body)
+	rec := newStreamRecorder()
+
+	srv.handleAIWorkflowStream(rec, req)
+	if rec.status != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", rec.status)
+	}
+	output := rec.body.String()
+	if strings.Contains(output, `"mode_profile":"ralph"`) {
+		t.Fatalf("expected non-ralph mode_profile when feature disabled")
+	}
+	if !strings.Contains(output, `"mode_profile":"default"`) {
+		t.Fatalf("expected default mode_profile in result payload")
+	}
+}
